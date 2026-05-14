@@ -1,0 +1,349 @@
+"""
+FastAPI main application.
+
+HR AI Agent - Authentication Module
+
+This is the entry point for the FastAPI backend application.
+
+To run:
+    uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
+"""
+
+from contextlib import asynccontextmanager
+import traceback
+
+from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from backend.app.core.config import settings
+from backend.app.database.indexes import create_indexes
+from backend.app.database.mongo_connection import MongoDB
+from backend.app.database.redis_connection import RedisDB
+from backend.app.routes.auth import router as auth_router
+
+# -------------------------
+# Lifespan events
+# -------------------------
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Application lifespan events.
+
+    Startup:
+    - Connect to MongoDB
+    - Connect to Redis
+    - Create database indexes
+
+    Shutdown:
+    - Disconnect from MongoDB
+    - Disconnect from Redis
+    """
+
+    print("=" * 60)
+    print("Starting HR AI Agent - Authentication Service")
+    print("=" * 60)
+
+    try:
+        await MongoDB.connect()
+        await RedisDB.connect()
+
+        db = MongoDB.get_database()
+        await create_indexes(db)
+
+        print("=" * 60)
+        print("All services started successfully")
+        print("=" * 60)
+        print(f"Environment: {settings.ENVIRONMENT}")
+        print(f"Debug mode: {settings.DEBUG}")
+        print("API documentation: http://localhost:8000/docs")
+        print("=" * 60)
+
+    except Exception as exc:
+        print("=" * 60)
+        print(f"Failed to start services: {exc}")
+        print("=" * 60)
+        raise
+
+    yield
+
+    print("=" * 60)
+    print("Shutting down HR AI Agent - Authentication Service")
+    print("=" * 60)
+
+    await RedisDB.disconnect()
+    await MongoDB.disconnect()
+
+    print("All services stopped")
+    print("=" * 60)
+
+
+# -------------------------
+# FastAPI app
+# -------------------------
+
+app = FastAPI(
+    title=settings.APP_NAME,
+    version=settings.APP_VERSION,
+    description=(
+        "HR AI Agent - Authentication Service\n\n"
+        "Provides secure authentication with:\n"
+        "- Email-based signup with OTP verification\n"
+        "- Login with username/password\n"
+        "- Forgot password with OTP\n"
+        "- JWT access and refresh tokens\n"
+        "- Protected routes with role-based access"
+    ),
+    lifespan=lifespan,
+    docs_url="/docs" if not settings.is_production() else None,
+    redoc_url="/redoc" if not settings.is_production() else None,
+    openapi_url="/openapi.json" if not settings.is_production() else None,
+)
+
+
+# -------------------------
+# CORS middleware
+# -------------------------
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.get_cors_origins(),
+    allow_credentials=settings.ALLOW_CREDENTIALS,
+    allow_methods=settings.get_cors_methods(),
+    allow_headers=(
+        settings.ALLOWED_HEADERS.split(",")
+        if settings.ALLOWED_HEADERS != "*"
+        else ["*"]
+    ),
+    expose_headers=["Content-Type", "Authorization"],
+)
+
+
+# -------------------------
+# Route registration
+# -------------------------
+
+app.include_router(
+    auth_router,
+    prefix=settings.API_PREFIX,
+)
+
+
+# -------------------------
+# Root endpoints
+# -------------------------
+
+@app.get(
+    "/",
+    tags=["Root"],
+    summary="API root",
+    description="Welcome endpoint with API information",
+)
+async def root():
+    """
+    Root endpoint.
+    """
+
+    return {
+        "service": settings.APP_NAME,
+        "version": settings.APP_VERSION,
+        "status": "running",
+        "environment": settings.ENVIRONMENT,
+        "api_prefix": settings.API_PREFIX,
+        "docs": "/docs" if not settings.is_production() else "disabled in production",
+    }
+
+
+@app.get(
+    "/health",
+    tags=["Health"],
+    summary="Health check",
+    description="Check if the service and its dependencies are healthy",
+)
+async def health_check():
+    """
+    Health check endpoint.
+
+    Checks:
+    - FastAPI service
+    - MongoDB connection
+    - Redis connection
+    """
+
+    health_status = {
+        "service": "healthy",
+        "mongodb": "unknown",
+        "redis": "unknown",
+    }
+
+    all_healthy = True
+
+    try:
+        client = MongoDB.get_client()
+        await client.admin.command("ping")
+        health_status["mongodb"] = "healthy"
+    except Exception as exc:
+        health_status["mongodb"] = f"unhealthy: {str(exc)}"
+        all_healthy = False
+
+    try:
+        redis_client = RedisDB.get_client()
+        await redis_client.ping()
+        health_status["redis"] = "healthy"
+    except Exception as exc:
+        health_status["redis"] = f"unhealthy: {str(exc)}"
+        all_healthy = False
+
+    status_code = (
+        status.HTTP_200_OK
+        if all_healthy
+        else status.HTTP_503_SERVICE_UNAVAILABLE
+    )
+
+    return JSONResponse(
+        status_code=status_code,
+        content=health_status,
+    )
+
+
+@app.get(
+    "/health/ready",
+    tags=["Health"],
+    summary="Readiness check",
+    description="Check if the service is ready to accept requests",
+)
+async def readiness_check():
+    """
+    Readiness check for Docker/Kubernetes health probes.
+    """
+
+    try:
+        client = MongoDB.get_client()
+        await client.admin.command("ping")
+
+        redis_client = RedisDB.get_client()
+        await redis_client.ping()
+
+        return {"status": "ready"}
+
+    except Exception as exc:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "status": "not ready",
+                "error": str(exc),
+            },
+        )
+
+
+@app.get(
+    "/health/live",
+    tags=["Health"],
+    summary="Liveness check",
+    description="Check if the service process is alive",
+)
+async def liveness_check():
+    """
+    Liveness check.
+
+    If this endpoint responds, the service process is alive.
+    """
+
+    return {"status": "alive"}
+
+
+# -------------------------
+# Exception handlers
+# -------------------------
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request,
+    exc: RequestValidationError,
+):
+    """
+    Handles Pydantic/FastAPI validation errors.
+    """
+
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "detail": exc.errors(),
+            "error_code": "VALIDATION_ERROR",
+            "path": request.url.path,
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(
+    request: Request,
+    exc: Exception,
+):
+    """
+    Handles unhandled exceptions.
+
+    Production:
+    - Return generic error
+
+    Development:
+    - Return detailed error
+    """
+
+    error_detail = str(exc)
+    error_traceback = traceback.format_exc()
+
+    print("=" * 60)
+    print("UNHANDLED EXCEPTION")
+    print("=" * 60)
+    print(f"Path: {request.url.path}")
+    print(f"Method: {request.method}")
+    print(f"Error: {error_detail}")
+    print("Traceback:")
+    print(error_traceback)
+    print("=" * 60)
+
+    if settings.is_production():
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "detail": "Internal server error. Please contact support.",
+                "error_code": "INTERNAL_ERROR",
+            },
+        )
+
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "detail": error_detail,
+            "error_code": "INTERNAL_ERROR",
+            "traceback": error_traceback.split("\n"),
+        },
+    )
+
+
+# -------------------------
+# Development server
+# -------------------------
+
+if __name__ == "__main__":
+    import uvicorn
+
+    print("=" * 60)
+    print("Starting development server")
+    print("=" * 60)
+    print(f"Host: {settings.HOST}")
+    print(f"Port: {settings.PORT}")
+    print(f"Reload: {settings.RELOAD}")
+    print("Docs: http://localhost:8000/docs")
+    print("=" * 60)
+
+    uvicorn.run(
+        "backend.app.main:app",
+        host=settings.HOST,
+        port=settings.PORT,
+        reload=settings.RELOAD,
+        log_level="info",
+    )
