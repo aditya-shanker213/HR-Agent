@@ -11,3 +11,6 @@ venv/
 storage/
 *.wav
 *.mp3
+*.onnx
+*.bin
+
