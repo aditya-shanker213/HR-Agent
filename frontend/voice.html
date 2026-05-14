@@ -1,0 +1,1123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Aria — HR Voice Assistant</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+  /* ── Reset & base ─────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0a0a0c;
+    --surface:   #111116;
+    --surface2:  #18181f;
+    --border:    rgba(255,255,255,0.07);
+    --border2:   rgba(255,255,255,0.13);
+    --text:      #e8e6f0;
+    --muted:     rgba(232,230,240,0.4);
+    --accent:    #6c63ff;
+    --accent2:   #a89cff;
+    --danger:    #ff5c5c;
+    --success:   #3ecf8e;
+    --mono:      'DM Mono', monospace;
+    --display:   'Syne', sans-serif;
+    --radius:    16px;
+    --radius-sm: 8px;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--display);
+    overflow-x: hidden;
+  }
+
+  /* ── Background grain ─────────────────────────────── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(108,99,255,0.12) 0%, transparent 60%),
+      url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── Layout ───────────────────────────────────────── */
+  .app {
+    position: relative;
+    z-index: 1;
+    min-height: 100vh;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  /* ── Header ───────────────────────────────────────── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 28px 0 24px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .logo-mark {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: var(--accent);
+    display: grid;
+    place-items: center;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    color: #fff;
+    font-family: var(--display);
+  }
+
+  .logo-text {
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.3px;
+  }
+
+  .logo-sub {
+    font-size: 11px;
+    font-family: var(--mono);
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-top: 1px;
+  }
+
+  .status-pill {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 14px;
+    border-radius: 100px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    font-size: 12px;
+    font-family: var(--mono);
+    color: var(--muted);
+    transition: all 0.3s;
+  }
+
+  .status-pill .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: background 0.3s;
+  }
+
+  .status-pill.ready .dot  { background: var(--success); box-shadow: 0 0 6px var(--success); }
+  .status-pill.ready       { color: var(--success); border-color: rgba(62,207,142,0.25); }
+  .status-pill.recording .dot { background: var(--danger); animation: pulse-dot 1s ease-in-out infinite; }
+  .status-pill.recording      { color: var(--danger); border-color: rgba(255,92,92,0.25); }
+  .status-pill.thinking .dot  { background: var(--accent2); animation: pulse-dot 1.4s ease-in-out infinite; }
+  .status-pill.thinking       { color: var(--accent2); border-color: rgba(168,156,255,0.25); }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.5; transform: scale(0.7); }
+  }
+
+  /* ── Main content ─────────────────────────────────── */
+  main {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    padding: 32px 0;
+  }
+
+  /* ── Conversation feed ────────────────────────────── */
+  .conversation {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-height: 260px;
+    max-height: 420px;
+    overflow-y: auto;
+    padding-right: 4px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border2) transparent;
+  }
+
+  .conversation::-webkit-scrollbar { width: 4px; }
+  .conversation::-webkit-scrollbar-track { background: transparent; }
+  .conversation::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+
+  /* Empty state */
+  .empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 40px;
+    text-align: center;
+    opacity: 0;
+    animation: fade-up 0.6s 0.3s ease forwards;
+  }
+
+  .empty-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 16px;
+    border: 1px solid var(--border2);
+    display: grid;
+    place-items: center;
+    margin-bottom: 4px;
+  }
+
+  .empty-icon svg { opacity: 0.4; }
+
+  .empty-state h2 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text);
+    opacity: 0.7;
+  }
+
+  .empty-state p {
+    font-size: 13px;
+    font-family: var(--mono);
+    color: var(--muted);
+    max-width: 280px;
+    line-height: 1.6;
+  }
+
+  /* Message bubbles */
+  .message {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    animation: fade-up 0.35s ease forwards;
+    opacity: 0;
+  }
+
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .message.user { flex-direction: row-reverse; }
+
+  .avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    font-size: 12px;
+    font-weight: 600;
+    flex-shrink: 0;
+    font-family: var(--mono);
+  }
+
+  .message.user .avatar    { background: rgba(108,99,255,0.2); color: var(--accent2); border: 1px solid rgba(108,99,255,0.3); }
+  .message.agent .avatar   { background: rgba(62,207,142,0.15); color: var(--success); border: 1px solid rgba(62,207,142,0.25); }
+
+  .bubble {
+    max-width: 75%;
+    padding: 14px 18px;
+    border-radius: var(--radius);
+    font-size: 14.5px;
+    line-height: 1.65;
+    border: 1px solid var(--border);
+  }
+
+  .message.user .bubble {
+    background: rgba(108,99,255,0.12);
+    border-color: rgba(108,99,255,0.2);
+    border-radius: var(--radius) 6px var(--radius) var(--radius);
+    font-family: var(--mono);
+    font-size: 13px;
+    color: rgba(232,230,240,0.85);
+  }
+
+  .message.agent .bubble {
+    background: var(--surface);
+    border-color: var(--border2);
+    border-radius: 6px var(--radius) var(--radius) var(--radius);
+  }
+
+  .bubble-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .bubble-time {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+  }
+
+  .play-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 100px;
+    border: 1px solid var(--border2);
+    background: transparent;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 10px;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.04em;
+  }
+
+  .play-btn:hover { background: var(--surface2); color: var(--text); border-color: var(--accent); }
+  .play-btn svg   { width: 10px; height: 10px; }
+
+  /* ── Waveform / visualiser ────────────────────────── */
+  .visualiser-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    padding: 32px 0 8px;
+  }
+
+  .waveform-ring {
+    position: relative;
+    width: 140px;
+    height: 140px;
+    display: grid;
+    place-items: center;
+  }
+
+  .waveform-ring svg.ring {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  .ring-track {
+    fill: none;
+    stroke: var(--border2);
+    stroke-width: 1.5;
+  }
+
+  .ring-progress {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-dasharray: 376;
+    stroke-dashoffset: 376;
+    transition: stroke-dashoffset 0.1s linear;
+    transform-origin: center;
+    transform: rotate(-90deg);
+  }
+
+  .mic-btn {
+    position: relative;
+    z-index: 1;
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    border: none;
+    background: var(--surface2);
+    border: 1.5px solid var(--border2);
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    transition: all 0.25s cubic-bezier(0.34,1.56,0.64,1);
+    outline: none;
+  }
+
+  .mic-btn:hover {
+    transform: scale(1.06);
+    border-color: var(--accent);
+    background: rgba(108,99,255,0.1);
+  }
+
+  .mic-btn.recording {
+    background: rgba(255,92,92,0.12);
+    border-color: var(--danger);
+    animation: breathe 1.5s ease-in-out infinite;
+  }
+
+  .mic-btn.thinking {
+    background: rgba(108,99,255,0.1);
+    border-color: var(--accent2);
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+
+  @keyframes breathe {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255,92,92,0.3); }
+    50%       { box-shadow: 0 0 0 16px rgba(255,92,92,0); }
+  }
+
+  .mic-btn svg { transition: all 0.2s; }
+  .mic-btn.recording svg { color: var(--danger); }
+  .mic-btn.thinking svg  { color: var(--accent2); opacity: 0.7; }
+
+  /* Bars waveform (shown during recording) */
+  .bars {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    height: 40px;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .bars.active { opacity: 1; }
+  .bar {
+    width: 3px;
+    border-radius: 3px;
+    background: var(--danger);
+    animation: bar-bounce 0.8s ease-in-out infinite;
+    min-height: 4px;
+  }
+  .bar:nth-child(1) { animation-delay: 0s;    --h: 12px; }
+  .bar:nth-child(2) { animation-delay: 0.1s;  --h: 24px; }
+  .bar:nth-child(3) { animation-delay: 0.2s;  --h: 36px; }
+  .bar:nth-child(4) { animation-delay: 0.3s;  --h: 28px; }
+  .bar:nth-child(5) { animation-delay: 0.15s; --h: 40px; }
+  .bar:nth-child(6) { animation-delay: 0.25s; --h: 20px; }
+  .bar:nth-child(7) { animation-delay: 0.05s; --h: 32px; }
+  .bar:nth-child(8) { animation-delay: 0.35s; --h: 16px; }
+  .bar:nth-child(9) { animation-delay: 0.2s;  --h: 28px; }
+
+  @keyframes bar-bounce {
+    0%, 100% { height: 4px; }
+    50%       { height: var(--h, 20px); }
+  }
+
+  /* Thinking spinner */
+  .spinner {
+    width: 36px;
+    height: 36px;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .spinner.active { opacity: 1; }
+  .spinner svg { animation: spin 1.2s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .action-hint {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+    min-height: 18px;
+    text-align: center;
+  }
+
+  /* ── Controls row ─────────────────────────────────── */
+  .controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+  }
+
+  .icon-btn {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--muted);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    outline: none;
+  }
+  .icon-btn:hover { border-color: var(--border2); color: var(--text); background: var(--surface2); }
+  .icon-btn svg { width: 16px; height: 16px; }
+
+  /* ── Bottom session info ──────────────────────────── */
+  footer {
+    padding: 16px 0 28px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .session-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+  }
+
+  .session-id {
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .turn-count {
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+  }
+
+  .clear-btn {
+    padding: 6px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    cursor: pointer;
+    letter-spacing: 0.04em;
+    transition: all 0.2s;
+  }
+  .clear-btn:hover { border-color: var(--danger); color: var(--danger); }
+
+  /* ── Error toast ──────────────────────────────────── */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(80px);
+    background: rgba(255,92,92,0.15);
+    border: 1px solid rgba(255,92,92,0.3);
+    color: #ff9a9a;
+    padding: 12px 20px;
+    border-radius: 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+    z-index: 100;
+    transition: transform 0.35s cubic-bezier(0.34,1.56,0.64,1);
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+
+  /* ── Transcript preview ───────────────────────────── */
+  .live-transcript {
+    min-height: 36px;
+    padding: 10px 16px;
+    border-radius: var(--radius-sm);
+    border: 1px dashed var(--border2);
+    background: var(--surface);
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    text-align: center;
+    transition: all 0.3s;
+    letter-spacing: 0.02em;
+  }
+  .live-transcript.has-text {
+    color: var(--text);
+    border-style: solid;
+    border-color: rgba(108,99,255,0.25);
+    background: rgba(108,99,255,0.06);
+  }
+
+  /* ── Config panel ─────────────────────────────────── */
+  .config-panel {
+    display: none;
+    flex-direction: column;
+    gap: 12px;
+    padding: 20px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border2);
+    background: var(--surface);
+    margin-bottom: 4px;
+  }
+  .config-panel.open { display: flex; animation: fade-up 0.2s ease; }
+
+  .config-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .config-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .config-input {
+    background: var(--surface2);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 7px 12px;
+    outline: none;
+    width: 220px;
+    transition: border-color 0.2s;
+  }
+  .config-input:focus { border-color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Header -->
+  <header>
+    <div class="logo">
+      <div class="logo-mark">A</div>
+      <div>
+        <div class="logo-text">Aria</div>
+        <div class="logo-sub">HR Voice Assistant</div>
+      </div>
+    </div>
+    <div class="status-pill" id="statusPill">
+      <span class="dot"></span>
+      <span id="statusText">Initialising</span>
+    </div>
+  </header>
+
+  <!-- Main -->
+  <main>
+
+    <!-- Config panel (hidden by default) -->
+    <div class="config-panel" id="configPanel">
+      <div class="config-row">
+        <span class="config-label">API Base URL</span>
+        <input class="config-input" id="cfgBaseUrl" value="http://localhost:8000/api/v1" placeholder="http://localhost:8000/api/v1"/>
+      </div>
+    </div>
+
+    <!-- Conversation feed -->
+    <div class="conversation" id="conversation">
+      <div class="empty-state" id="emptyState">
+        <div class="empty-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/>
+          </svg>
+        </div>
+        <h2>Start speaking</h2>
+        <p>Hold the button, ask about leave, payroll, or any HR query.</p>
+      </div>
+    </div>
+
+    <!-- Live transcript -->
+    <div class="live-transcript" id="liveTranscript">
+      Transcript will appear here after you speak
+    </div>
+
+    <!-- Visualiser + mic -->
+    <div class="visualiser-wrap">
+
+      <!-- Recording bars -->
+      <div class="bars" id="bars">
+        <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+        <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+        <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+      </div>
+
+      <!-- Thinking spinner -->
+      <div class="spinner" id="spinner">
+        <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+          <circle cx="18" cy="18" r="15" stroke="var(--border2)" stroke-width="2"/>
+          <path d="M18 3 A15 15 0 0 1 33 18" stroke="var(--accent2)" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </div>
+
+      <!-- Mic button with ring -->
+      <div class="waveform-ring">
+        <svg class="ring" viewBox="0 0 140 140">
+          <circle class="ring-track" cx="70" cy="70" r="60"/>
+          <circle class="ring-progress" id="ringProgress" cx="70" cy="70" r="60"/>
+        </svg>
+        <button class="mic-btn" id="micBtn" title="Hold to record / click to toggle">
+          <!-- Mic icon -->
+          <svg id="iconMic" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/>
+          </svg>
+          <!-- Stop icon (hidden during recording) -->
+          <svg id="iconStop" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" style="display:none">
+            <rect x="5" y="5" width="14" height="14" rx="2"/>
+          </svg>
+          <!-- Spinner (hidden during thinking) -->
+          <svg id="iconThink" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="display:none; animation: spin 1.2s linear infinite;">
+            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="action-hint" id="actionHint">Press to start recording</div>
+
+    </div><!-- /visualiser-wrap -->
+
+    <!-- Controls -->
+    <div class="controls">
+      <!-- Mute/unmute playback -->
+      <button class="icon-btn" id="muteBtn" title="Mute audio playback">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+          <path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/>
+        </svg>
+      </button>
+
+      <!-- Settings -->
+      <button class="icon-btn" id="settingsBtn" title="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+    </div>
+
+  </main>
+
+  <!-- Footer -->
+  <footer>
+    <div class="session-info">
+      <span>SESSION</span>
+      <span class="session-id" id="sessionIdEl">—</span>
+    </div>
+    <div class="session-info">
+      <span class="turn-count" id="turnCountEl">0 turns</span>
+    </div>
+    <button class="clear-btn" id="clearBtn">Clear session</button>
+  </footer>
+
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ── Config ────────────────────────────────────────────────
+const cfg = {
+  get baseUrl() { return document.getElementById('cfgBaseUrl').value.replace(/\/$/, ''); },
+};
+
+// ── State ─────────────────────────────────────────────────
+let sessionId       = null;
+let isRecording     = false;
+let isThinking      = false;
+let mediaRecorder   = null;
+let audioChunks     = [];
+let muted           = false;
+let turnCount       = 0;
+let currentAudioUrl = null;
+let recordingStart  = null;
+let ringTimer       = null;
+const MAX_RECORD_MS = 30_000;   // 30s max recording
+
+// ── DOM refs ──────────────────────────────────────────────
+const micBtn        = document.getElementById('micBtn');
+const iconMic       = document.getElementById('iconMic');
+const iconStop      = document.getElementById('iconStop');
+const iconThink     = document.getElementById('iconThink');
+const statusPill    = document.getElementById('statusPill');
+const statusText    = document.getElementById('statusText');
+const actionHint    = document.getElementById('actionHint');
+const bars          = document.getElementById('bars');
+const spinner       = document.getElementById('spinner');
+const conversation  = document.getElementById('conversation');
+const emptyState    = document.getElementById('emptyState');
+const liveTranscript= document.getElementById('liveTranscript');
+const sessionIdEl   = document.getElementById('sessionIdEl');
+const turnCountEl   = document.getElementById('turnCountEl');
+const toastEl       = document.getElementById('toast');
+const muteBtn       = document.getElementById('muteBtn');
+const settingsBtn   = document.getElementById('settingsBtn');
+const clearBtn      = document.getElementById('clearBtn');
+const ringProgress  = document.getElementById('ringProgress');
+const configPanel   = document.getElementById('configPanel');
+
+// ── Status helpers ────────────────────────────────────────
+function setStatus(state, label) {
+  statusPill.className = 'status-pill ' + state;
+  statusText.textContent = label;
+}
+
+function setHint(text) { actionHint.textContent = text; }
+
+// ── Toast ─────────────────────────────────────────────────
+let toastTimer;
+function showToast(msg) {
+  clearTimeout(toastTimer);
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 3500);
+}
+
+// ── Ring progress (recording timer) ──────────────────────
+function startRing() {
+  const circumference = 376;
+  recordingStart = Date.now();
+  clearInterval(ringTimer);
+  ringTimer = setInterval(() => {
+    const elapsed = Date.now() - recordingStart;
+    const pct = Math.min(elapsed / MAX_RECORD_MS, 1);
+    ringProgress.style.strokeDashoffset = circumference * (1 - pct);
+    if (elapsed >= MAX_RECORD_MS) stopRecording();
+  }, 100);
+}
+
+function resetRing() {
+  clearInterval(ringTimer);
+  ringProgress.style.strokeDashoffset = 376;
+}
+
+// ── UI states ─────────────────────────────────────────────
+function setUIIdle() {
+  isRecording = false;
+  isThinking  = false;
+  micBtn.className    = 'mic-btn';
+  iconMic.style.display   = '';
+  iconStop.style.display  = 'none';
+  iconThink.style.display = 'none';
+  bars.classList.remove('active');
+  spinner.classList.remove('active');
+  setStatus('ready', 'Ready');
+  setHint('Press to start recording');
+  resetRing();
+}
+
+function setUIRecording() {
+  isRecording = true;
+  micBtn.className    = 'mic-btn recording';
+  iconMic.style.display   = 'none';
+  iconStop.style.display  = '';
+  iconThink.style.display = 'none';
+  bars.classList.add('active');
+  spinner.classList.remove('active');
+  setStatus('recording', 'Recording');
+  setHint('Press again to stop');
+  startRing();
+}
+
+function setUIThinking() {
+  isRecording = false;
+  isThinking  = true;
+  micBtn.className    = 'mic-btn thinking';
+  iconMic.style.display   = 'none';
+  iconStop.style.display  = 'none';
+  iconThink.style.display = '';
+  bars.classList.remove('active');
+  spinner.classList.add('active');
+  setStatus('thinking', 'Processing');
+  setHint('Aria is thinking…');
+  resetRing();
+}
+
+// ── Microphone access ─────────────────────────────────────
+async function getMicAccess() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    setStatus('ready', 'Ready');
+    setHint('Press to start recording');
+    return stream;
+  } catch (err) {
+    setStatus('', 'Mic blocked');
+    setHint('Microphone access denied');
+    showToast('Microphone permission required');
+    return null;
+  }
+}
+
+// ── Start recording ───────────────────────────────────────
+async function startRecording() {
+  if (isThinking) return;
+
+  const stream = await getMicAccess();
+  if (!stream) return;
+
+  audioChunks = [];
+
+  // Prefer webm/opus (best browser support + Whisper supports it)
+  const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus'
+    : MediaRecorder.isTypeSupported('audio/webm')
+    ? 'audio/webm'
+    : 'audio/ogg';
+
+  mediaRecorder = new MediaRecorder(stream, { mimeType });
+
+  mediaRecorder.ondataavailable = e => {
+    if (e.data.size > 0) audioChunks.push(e.data);
+  };
+
+  mediaRecorder.onstop = async () => {
+    stream.getTracks().forEach(t => t.stop());
+    const blob = new Blob(audioChunks, { type: mimeType });
+    await sendAudio(blob);
+  };
+
+  mediaRecorder.start(250);   // collect chunks every 250ms
+  setUIRecording();
+}
+
+// ── Stop recording ────────────────────────────────────────
+function stopRecording() {
+  if (!mediaRecorder || mediaRecorder.state === 'inactive') return;
+  mediaRecorder.stop();
+  setUIThinking();
+}
+
+// ── Toggle ────────────────────────────────────────────────
+function toggleRecording() {
+  if (isThinking) return;
+  if (isRecording) stopRecording();
+  else startRecording();
+}
+
+// ── Send audio to FastAPI ─────────────────────────────────
+async function sendAudio(blob) {
+  setUIThinking();
+
+  // Show "processing" in transcript area
+  liveTranscript.textContent = 'Transcribing…';
+  liveTranscript.classList.remove('has-text');
+
+  const formData = new FormData();
+  formData.append('audio', blob, 'recording.webm');
+  if (sessionId) formData.append('session_id', sessionId);
+
+  let response;
+  try {
+    response = await fetch(`${cfg.baseUrl}/voice/chat`, {
+      method: 'POST',
+      body: formData,
+    });
+  } catch (networkErr) {
+    showToast('Cannot reach server — is FastAPI running on localhost:8000?');
+    setUIIdle();
+    liveTranscript.textContent = 'Connection failed';
+    return;
+  }
+
+  if (!response.ok) {
+    let detail = `Server error ${response.status}`;
+    try {
+      const err = await response.json();
+      detail = err.detail || detail;
+    } catch (_) {}
+    showToast(detail);
+    setUIIdle();
+    liveTranscript.textContent = detail;
+    return;
+  }
+
+  // Extract metadata from headers
+  const newSessionId  = response.headers.get('X-Session-ID');
+  const transcript    = response.headers.get('X-Transcript') || '';
+  const responseText  = response.headers.get('X-Response-Text') || '';
+
+  if (newSessionId) {
+    sessionId = newSessionId;
+    sessionIdEl.textContent = sessionId.slice(0, 18) + '…';
+  }
+
+  // Show transcript
+  if (transcript) {
+    liveTranscript.textContent = '"' + transcript + '"';
+    liveTranscript.classList.add('has-text');
+  }
+
+  // Get audio blob
+  const audioBlob = await response.blob();
+  const audioUrl  = URL.createObjectURL(audioBlob);
+
+  // Store for replay
+  if (currentAudioUrl) URL.revokeObjectURL(currentAudioUrl);
+  currentAudioUrl = audioUrl;
+
+  // Add to conversation
+  turnCount++;
+  turnCountEl.textContent = turnCount + (turnCount === 1 ? ' turn' : ' turns');
+  addMessage('user', transcript || '(audio)');
+  addMessage('agent', responseText || '(audio response)', audioUrl);
+
+  // Auto-play response
+  if (!muted) {
+    const audio = new Audio(audioUrl);
+    audio.play().catch(() => {
+      showToast('Auto-play blocked — click the play button in the response');
+    });
+  }
+
+  setUIIdle();
+}
+
+// ── Add message to conversation feed ─────────────────────
+function addMessage(role, text, audioUrl = null) {
+  // Remove empty state
+  if (emptyState && emptyState.parentNode) emptyState.remove();
+
+  const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const initials = role === 'user' ? 'ME' : 'AI';
+
+  const wrap = document.createElement('div');
+  wrap.className = `message ${role}`;
+
+  const avatar = document.createElement('div');
+  avatar.className = 'avatar';
+  avatar.textContent = initials;
+
+  const right = document.createElement('div');
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.textContent = text;
+
+  const meta = document.createElement('div');
+  meta.className = 'bubble-meta';
+
+  const time = document.createElement('span');
+  time.className = 'bubble-time';
+  time.textContent = now;
+  meta.appendChild(time);
+
+  if (audioUrl && role === 'agent') {
+    const playBtn = document.createElement('button');
+    playBtn.className = 'play-btn';
+    playBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg> replay`;
+    playBtn.onclick = () => {
+      const a = new Audio(audioUrl);
+      a.play();
+    };
+    meta.appendChild(playBtn);
+  }
+
+  right.appendChild(bubble);
+  right.appendChild(meta);
+  wrap.appendChild(avatar);
+  wrap.appendChild(right);
+  conversation.appendChild(wrap);
+
+  // Scroll to bottom
+  conversation.scrollTop = conversation.scrollHeight;
+}
+
+// ── Clear session ─────────────────────────────────────────
+async function clearSession() {
+  if (sessionId) {
+    try {
+      await fetch(`${cfg.baseUrl}/voice/chat/${sessionId}`, { method: 'DELETE' });
+    } catch (_) {}
+    sessionId = null;
+  }
+  sessionIdEl.textContent = '—';
+  turnCount = 0;
+  turnCountEl.textContent = '0 turns';
+  conversation.innerHTML = '';
+
+  // Re-add empty state
+  const es = document.createElement('div');
+  es.className = 'empty-state';
+  es.id = 'emptyState';
+  es.innerHTML = `
+    <div class="empty-icon">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/>
+      </svg>
+    </div>
+    <h2>Start speaking</h2>
+    <p>Hold the button, ask about leave, payroll, or any HR query.</p>`;
+  es.style.opacity = '0';
+  es.style.animation = 'fade-up 0.5s ease forwards';
+  conversation.appendChild(es);
+
+  liveTranscript.textContent = 'Transcript will appear here after you speak';
+  liveTranscript.classList.remove('has-text');
+}
+
+// ── Mute toggle ───────────────────────────────────────────
+muteBtn.addEventListener('click', () => {
+  muted = !muted;
+  muteBtn.style.color = muted ? 'var(--danger)' : '';
+  muteBtn.title = muted ? 'Unmute playback' : 'Mute audio playback';
+});
+
+// ── Settings toggle ───────────────────────────────────────
+settingsBtn.addEventListener('click', () => {
+  configPanel.classList.toggle('open');
+});
+
+// ── Clear button ──────────────────────────────────────────
+clearBtn.addEventListener('click', clearSession);
+
+// ── Mic button ────────────────────────────────────────────
+micBtn.addEventListener('click', toggleRecording);
+
+// ── Keyboard shortcut: Space = toggle recording ───────────
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT') {
+    e.preventDefault();
+    toggleRecording();
+  }
+});
+
+// ── Health check on load ──────────────────────────────────
+async function checkHealth() {
+  setStatus('', 'Checking server…');
+  try {
+    const r = await fetch(cfg.baseUrl.replace('/api/v1', '') + '/health', { signal: AbortSignal.timeout(4000) });
+    if (r.ok) {
+      const data = await r.json();
+      const allOk = data.status === 'ok';
+      if (allOk) {
+        setStatus('ready', 'Ready');
+        setHint('Press to start recording');
+      } else {
+        const failed = Object.entries(data.services || {})
+          .filter(([,v]) => v !== 'ok')
+          .map(([k]) => k).join(', ');
+        setStatus('', 'Degraded');
+        setHint(`Services unavailable: ${failed}`);
+        showToast(`Degraded: ${failed} not reachable`);
+      }
+    } else {
+      throw new Error('non-200');
+    }
+  } catch (_) {
+    setStatus('', 'Server offline');
+    setHint('Start FastAPI: uvicorn app.main:app --reload');
+    showToast('FastAPI server not found at localhost:8000');
+  }
+}
+
+checkHealth();
+</script>
+</body>
+</html>
