@@ -5,7 +5,8 @@ Indexes are created at application startup to ensure:
 - Unique usernames and emails
 - Fast login/admin queries
 - Unique department codes
-- Fast department listing, filtering, searching, and hierarchy lookups
+- Unique designation codes
+- Fast master data listing, filtering, searching, and hierarchy lookups
 
 Pattern:
 FastAPI startup -> MongoDB connect -> create_indexes(db)
@@ -46,6 +47,7 @@ class IndexManager:
 
         results["users"] = await self.create_users_indexes()
         results["departments"] = await self.create_departments_indexes()
+        results["designations"] = await self.create_designations_indexes()
 
         print("MongoDB indexes checked/created successfully")
 
@@ -144,11 +146,6 @@ class IndexManager:
         4. location + is_active
         5. name
         6. text search index for name/code/description/location
-
-        Why unique code matters:
-        DepartmentRepository catches DuplicateKeyError during create.
-        That DuplicateKeyError only happens reliably if MongoDB has a unique
-        index on departments.code.
         """
         collection = self.db.departments
         created_or_verified: List[str] = []
@@ -205,6 +202,85 @@ class IndexManager:
 
         return {
             "collection": "departments",
+            "indexes": created_or_verified,
+            "total": len(created_or_verified),
+        }
+
+    # -------------------------
+    # Designations indexes
+    # -------------------------
+
+    async def create_designations_indexes(self) -> Dict[str, Any]:
+        """
+        Create indexes for designations collection.
+
+        Indexes:
+        1. code unique
+        2. is_active + display_order
+        3. department_id + is_active
+        4. level + is_active
+        5. name
+        6. text search index for name/code/description
+
+        Why unique code matters:
+        DesignationRepository catches DuplicateKeyError during create.
+        That DuplicateKeyError only happens reliably if MongoDB has a unique
+        index on designations.code.
+        """
+        collection = self.db.designations
+        created_or_verified: List[str] = []
+
+        index_definitions = [
+            {
+                "keys": [("code", ASCENDING)],
+                "name": "idx_designations_code_unique",
+                "unique": True,
+            },
+            {
+                "keys": [("is_active", ASCENDING), ("display_order", ASCENDING)],
+                "name": "idx_designations_active_display_order",
+            },
+            {
+                "keys": [("department_id", ASCENDING), ("is_active", ASCENDING)],
+                "name": "idx_designations_department_active",
+            },
+            {
+                "keys": [("level", ASCENDING), ("is_active", ASCENDING)],
+                "name": "idx_designations_level_active",
+            },
+            {
+                "keys": [("name", ASCENDING)],
+                "name": "idx_designations_name",
+            },
+            {
+                "keys": [
+                    ("name", TEXT),
+                    ("code", TEXT),
+                    ("description", TEXT),
+                ],
+                "name": "idx_designations_text_search",
+            },
+        ]
+
+        for index in index_definitions:
+            try:
+                index_name = await collection.create_index(
+                    index["keys"],
+                    name=index["name"],
+                    unique=index.get("unique", False),
+                    sparse=index.get("sparse", False),
+                )
+                created_or_verified.append(index_name)
+
+            except Exception as exc:
+                print(f"Failed to create/check designations index {index['name']}: {exc}")
+
+        print(
+            f"Designations collection: {len(created_or_verified)} indexes checked/created"
+        )
+
+        return {
+            "collection": "designations",
             "indexes": created_or_verified,
             "total": len(created_or_verified),
         }

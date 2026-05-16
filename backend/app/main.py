@@ -1,7 +1,7 @@
 """
 FastAPI main application.
 
-HR AI Agent - Authentication Module
+HR AI Agent Backend
 
 This is the entry point for the FastAPI backend application.
 
@@ -22,6 +22,8 @@ from backend.app.database.indexes import create_indexes
 from backend.app.database.mongo_connection import MongoDB
 from backend.app.database.redis_connection import RedisDB
 from backend.app.routes.auth import router as auth_router
+from backend.app.routes.master_data import router as master_data_router
+
 
 # -------------------------
 # Lifespan events
@@ -43,7 +45,7 @@ async def lifespan(app: FastAPI):
     """
 
     print("=" * 60)
-    print("Starting HR AI Agent - Authentication Service")
+    print("Starting HR AI Agent Backend")
     print("=" * 60)
 
     try:
@@ -58,7 +60,7 @@ async def lifespan(app: FastAPI):
         print("=" * 60)
         print(f"Environment: {settings.ENVIRONMENT}")
         print(f"Debug mode: {settings.DEBUG}")
-        print("API documentation: http://localhost:8000/docs")
+        print(f"API documentation: http://localhost:{settings.PORT}/docs")
         print("=" * 60)
 
     except Exception as exc:
@@ -70,7 +72,7 @@ async def lifespan(app: FastAPI):
     yield
 
     print("=" * 60)
-    print("Shutting down HR AI Agent - Authentication Service")
+    print("Shutting down HR AI Agent Backend")
     print("=" * 60)
 
     await RedisDB.disconnect()
@@ -88,13 +90,24 @@ app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     description=(
-        "HR AI Agent - Authentication Service\n\n"
-        "Provides secure authentication with:\n"
-        "- Email-based signup with OTP verification\n"
+        "HR AI Agent Backend\n\n"
+        "Current modules:\n"
+        "- Authentication with email OTP verification\n"
         "- Login with username/password\n"
         "- Forgot password with OTP\n"
         "- JWT access and refresh tokens\n"
-        "- Protected routes with role-based access"
+        "- Role-based access control\n"
+        "- Department master data management\n\n"
+        "Planned modules:\n"
+        "- Designations\n"
+        "- Leave types\n"
+        "- Claim types\n"
+        "- Employee profiles\n"
+        "- Leave management\n"
+        "- Claim/reimbursement workflows\n"
+        "- Payroll queries\n"
+        "- RAG-based HR policy Q&A\n"
+        "- LangGraph AI agent workflows\n"
     ),
     lifespan=lifespan,
     docs_url="/docs" if not settings.is_production() else None,
@@ -130,6 +143,11 @@ app.include_router(
     prefix=settings.API_PREFIX,
 )
 
+app.include_router(
+    master_data_router,
+    prefix=settings.API_PREFIX,
+)
+
 
 # -------------------------
 # Root endpoints
@@ -153,6 +171,10 @@ async def root():
         "environment": settings.ENVIRONMENT,
         "api_prefix": settings.API_PREFIX,
         "docs": "/docs" if not settings.is_production() else "disabled in production",
+        "modules": [
+            "authentication",
+            "master_data_departments",
+        ],
     }
 
 
@@ -337,7 +359,7 @@ if __name__ == "__main__":
     print(f"Host: {settings.HOST}")
     print(f"Port: {settings.PORT}")
     print(f"Reload: {settings.RELOAD}")
-    print("Docs: http://localhost:8000/docs")
+    print(f"Docs: http://localhost:{settings.PORT}/docs")
     print("=" * 60)
 
     uvicorn.run(

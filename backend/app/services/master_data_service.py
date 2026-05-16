@@ -3,9 +3,9 @@ Master Data Service - Business logic for master data management.
 
 Current scope:
 - Departments
+- Designations
 
 Future scope:
-- Designations
 - Leave Types
 - Claim Types
 - Company Settings
@@ -33,6 +33,7 @@ from fastapi import HTTPException, status
 from pymongo.errors import DuplicateKeyError
 
 from backend.app.repositories.department_repository import DepartmentRepository
+from backend.app.repositories.designation_repository import DesignationRepository
 from backend.app.repositories.user_repository import UserRepository
 
 
@@ -40,10 +41,11 @@ class MasterDataService:
     """
     Service layer for master data operations.
 
-    This service currently handles Department master data.
+    This service currently handles:
+    - Department master data
+    - Designation master data
 
     Later:
-    - DesignationRepository can be added here
     - LeaveTypeRepository can be added here
     - ClaimTypeRepository can be added here
     - EmployeeRepository should replace UserRepository for department head validation
@@ -53,9 +55,11 @@ class MasterDataService:
         self,
         department_repo: DepartmentRepository,
         user_repo: UserRepository,
+        designation_repo: Optional[DesignationRepository] = None,
     ):
         self.department_repo = department_repo
         self.user_repo = user_repo
+        self.designation_repo = designation_repo
 
     # -------------------------
     # Internal helper methods
@@ -65,10 +69,22 @@ class MasterDataService:
         """
         Remove keys where value is None.
 
-        Useful for update requests because UpdateDepartmentRequest has all fields optional.
+        Useful for update requests because update schemas have all fields optional.
         Only fields actually provided should be updated.
         """
         return {key: value for key, value in data.items() if value is not None}
+
+    def _require_designation_repo(self) -> DesignationRepository:
+        """
+        Ensure designation repository is available before using designation methods.
+        """
+        if self.designation_repo is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Designation repository is not configured",
+            )
+
+        return self.designation_repo
 
     async def _validate_head_user(self, head_id: Optional[str]) -> None:
         """
@@ -130,9 +146,28 @@ class MasterDataService:
 
         # Future improvement:
         # Add circular hierarchy validation.
-        # Example:
-        # Engineering -> Backend -> AI Team
-        # Do not allow Engineering parent_id = AI Team
+
+    async def _validate_designation_department(
+        self,
+        department_id: Optional[str],
+    ) -> None:
+        """
+        Validate department_id for designation.
+
+        Rules:
+        - department_id is optional.
+        - If provided, department must exist and be active.
+        """
+        if not department_id:
+            return
+
+        department_exists = await self.department_repo.active_exists_by_id(department_id)
+
+        if not department_exists:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Department '{department_id}' not found or inactive",
+            )
 
     async def _enrich_department_details(
         self,
@@ -152,7 +187,6 @@ class MasterDataService:
         """
         enriched = dict(department)
 
-        # Department head details
         head_id = enriched.get("head_id")
         if head_id:
             head_user = await self.user_repo.find_by_id(head_id)
@@ -167,7 +201,6 @@ class MasterDataService:
             enriched["head_name"] = None
             enriched["head_email"] = None
 
-        # Parent department details
         parent_id = enriched.get("parent_id")
         if parent_id:
             parent_department = await self.department_repo.find_by_id(parent_id)
@@ -177,12 +210,46 @@ class MasterDataService:
         else:
             enriched["parent_name"] = None
 
-        # Children count
         enriched["children_count"] = await self.department_repo.get_children_count(
             enriched.get("id") or enriched.get("_id")
         )
 
-        # TODO: Replace with employee_repo.count_by_department() after employee module
+        # TODO: Replace with employee_repo.count_by_department() after employee module.
+        enriched["employee_count"] = 0
+
+        return enriched
+
+    async def _enrich_designation_details(
+        self,
+        designation: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Add extra calculated fields for designation detail response.
+
+        Adds:
+        - department_name
+        - department_code
+        - employee_count
+
+        employee_count is currently 0 because employee module is not created yet.
+        """
+        enriched = dict(designation)
+
+        department_id = enriched.get("department_id")
+        if department_id:
+            department = await self.department_repo.find_by_id(department_id)
+
+            if department:
+                enriched["department_name"] = department.get("name")
+                enriched["department_code"] = department.get("code")
+            else:
+                enriched["department_name"] = None
+                enriched["department_code"] = None
+        else:
+            enriched["department_name"] = None
+            enriched["department_code"] = None
+
+        # TODO: Replace with employee_repo.count_by_designation() after employee module.
         enriched["employee_count"] = 0
 
         return enriched
@@ -198,22 +265,6 @@ class MasterDataService:
     ) -> Dict[str, Any]:
         """
         Create a new department.
-
-        Business rules:
-        - Department code must be unique.
-        - Head user must exist and be active if provided.
-        - Parent department must exist and be active if provided.
-        - created_by and updated_by are set from current logged-in user.
-
-        Args:
-            department_data: Validated department data from schema.
-            created_by: Current user ID from JWT.
-
-        Returns:
-            Created department document.
-
-        Raises:
-            HTTPException if validation or creation fails.
         """
         department_data = self._clean_payload(department_data)
 
@@ -224,18 +275,15 @@ class MasterDataService:
                 detail="Department code is required",
             )
 
-        # Check code uniqueness before insert
         if await self.department_repo.code_exists(code):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Department code '{code}' already exists",
             )
 
-        # Validate references
         await self._validate_head_user(department_data.get("head_id"))
         await self._validate_parent_department(department_data.get("parent_id"))
 
-        # Add audit fields
         department_data["created_by"] = created_by
         department_data["updated_by"] = created_by
 
@@ -243,7 +291,6 @@ class MasterDataService:
             department_id = await self.department_repo.create(department_data)
 
         except DuplicateKeyError:
-            # This can still happen if two requests create the same code at the same time.
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Department code '{code}' already exists",
@@ -272,16 +319,6 @@ class MasterDataService:
     ) -> Dict[str, Any]:
         """
         Get department by ID.
-
-        Args:
-            department_id: Department MongoDB ID.
-            include_details: If True, enrich response with head/parent/count details.
-
-        Returns:
-            Department document.
-
-        Raises:
-            HTTPException if department not found.
         """
         department = await self.department_repo.find_by_id(department_id)
 
@@ -309,11 +346,6 @@ class MasterDataService:
     ) -> Tuple[List[Dict[str, Any]], int]:
         """
         List departments with filtering, search, sorting, and pagination.
-
-        Returns:
-            Tuple:
-            - departments list
-            - total count for pagination
         """
         departments = await self.department_repo.list_all(
             is_active=is_active,
@@ -343,22 +375,6 @@ class MasterDataService:
     ) -> Dict[str, Any]:
         """
         Update department fields.
-
-        Business rules:
-        - Department must exist.
-        - New code must be unique, excluding current department.
-        - Head user must exist and be active if provided.
-        - Parent department must exist and be active if provided.
-        - Department cannot be its own parent.
-        - updated_by is set from current logged-in user.
-
-        Args:
-            department_id: Department MongoDB ID.
-            update_data: Validated update data from schema.
-            updated_by: Current user ID from JWT.
-
-        Returns:
-            Updated department document.
         """
         update_data = self._clean_payload(update_data)
 
@@ -376,7 +392,6 @@ class MasterDataService:
                 detail=f"Department with ID '{department_id}' not found",
             )
 
-        # Validate code uniqueness only if code is being changed
         new_code = update_data.get("code")
         existing_code = existing_department.get("code")
 
@@ -390,7 +405,6 @@ class MasterDataService:
                     detail=f"Department code '{new_code}' already exists",
                 )
 
-        # Validate references only if provided
         if "head_id" in update_data:
             await self._validate_head_user(update_data.get("head_id"))
 
@@ -443,19 +457,6 @@ class MasterDataService:
     ) -> bool:
         """
         Deactivate a department using soft delete.
-
-        Business rules:
-        - Department must exist.
-        - Department must currently be active.
-        - Cannot deactivate if department has active child departments.
-        - Later, cannot deactivate if active employees belong to this department.
-
-        Args:
-            department_id: Department MongoDB ID.
-            updated_by: Current user ID from JWT.
-
-        Returns:
-            True if deactivated successfully.
         """
         department = await self.department_repo.find_by_id(department_id)
 
@@ -479,15 +480,7 @@ class MasterDataService:
 
         # TODO:
         # After employee module is created:
-        # employee_count = await self.employee_repo.count_by_department(
-        #     department_id=department_id,
-        #     is_active=True,
-        # )
-        # if employee_count > 0:
-        #     raise HTTPException(
-        #         status_code=status.HTTP_400_BAD_REQUEST,
-        #         detail=f"Cannot deactivate department with {employee_count} active employees",
-        #     )
+        # Do not allow deactivation if active employees belong to this department.
 
         deactivated = await self.department_repo.deactivate(
             department_id=department_id,
@@ -509,18 +502,6 @@ class MasterDataService:
     ) -> Dict[str, Any]:
         """
         Reactivate an inactive department.
-
-        Business rules:
-        - Department must exist.
-        - Department must currently be inactive.
-        - If department has a parent, parent must be active.
-
-        Args:
-            department_id: Department MongoDB ID.
-            updated_by: Current user ID from JWT.
-
-        Returns:
-            Activated department document.
         """
         department = await self.department_repo.find_by_id(department_id)
 
@@ -575,15 +556,6 @@ class MasterDataService:
     ) -> Dict[str, Any]:
         """
         Bulk import departments.
-
-        Args:
-            departments: List of validated department payloads.
-            created_by: Current user ID from JWT.
-            skip_duplicates: If True, duplicate codes are skipped.
-                             If False, import stops before insert when duplicate exists.
-
-        Returns:
-            Bulk import summary.
         """
         if not departments:
             raise HTTPException(
@@ -613,26 +585,20 @@ class MasterDataService:
 
                 normalized_code = code.strip().upper()
 
-                # Duplicate inside uploaded/imported payload
                 if normalized_code in seen_codes:
                     duplicate_error = {
                         "index": index,
                         "code": normalized_code,
-                        "error": "Duplicate department code in import payload",
+                        "error": "Duplicate department code inside import payload",
                     }
 
                     if skip_duplicates:
                         skipped.append(duplicate_error)
                         continue
 
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=duplicate_error,
-                    )
+                    failed.append(duplicate_error)
+                    continue
 
-                seen_codes.add(normalized_code)
-
-                # Duplicate already in database
                 if await self.department_repo.code_exists(normalized_code):
                     duplicate_error = {
                         "index": index,
@@ -644,12 +610,9 @@ class MasterDataService:
                         skipped.append(duplicate_error)
                         continue
 
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=duplicate_error,
-                    )
+                    failed.append(duplicate_error)
+                    continue
 
-                # Validate references
                 await self._validate_head_user(department_data.get("head_id"))
                 await self._validate_parent_department(department_data.get("parent_id"))
 
@@ -657,9 +620,16 @@ class MasterDataService:
                 department_data["updated_by"] = created_by
 
                 prepared_departments.append(department_data)
+                seen_codes.add(normalized_code)
 
-            except HTTPException:
-                raise
+            except HTTPException as exc:
+                failed.append(
+                    {
+                        "index": index,
+                        "code": raw_department.get("code"),
+                        "error": exc.detail,
+                    }
+                )
 
             except Exception as exc:
                 failed.append(
@@ -670,39 +640,450 @@ class MasterDataService:
                     }
                 )
 
-        created_ids: List[str] = []
-        repository_errors: List[Dict[str, Any]] = []
+        created_ids, insert_errors = await self.department_repo.create_many(
+            prepared_departments
+        )
 
-        if prepared_departments:
-            created_ids, repository_errors = await self.department_repo.create_many(
-                prepared_departments
-            )
-
-        failed.extend(repository_errors)
-
-        created_count = len(created_ids)
-        skipped_count = len(skipped)
-        failed_count = len(failed)
+        failed.extend(insert_errors)
 
         return {
-            "message": (
-                f"Bulk import completed. "
-                f"Created: {created_count}, "
-                f"Skipped: {skipped_count}, "
-                f"Failed: {failed_count}"
-            ),
-            "created_count": created_count,
-            "skipped_count": skipped_count,
-            "failed_count": failed_count,
+            "message": "Bulk department import completed",
+            "created_count": len(created_ids),
+            "skipped_count": len(skipped),
+            "failed_count": len(failed),
             "created_ids": created_ids,
             "errors": skipped + failed,
         }
 
     async def get_department_statistics(self) -> Dict[str, Any]:
         """
-        Get department statistics for admin dashboard.
-
-        Returns:
-            total, active, inactive, and location-wise department counts.
+        Get department statistics.
         """
         return await self.department_repo.get_statistics()
+
+    # -------------------------
+    # Designation Operations
+    # -------------------------
+
+    async def create_designation(
+        self,
+        designation_data: Dict[str, Any],
+        created_by: str,
+    ) -> Dict[str, Any]:
+        """
+        Create a new designation.
+
+        Business rules:
+        - Designation code must be unique.
+        - department_id is optional.
+        - If department_id is provided, department must exist and be active.
+        - created_by and updated_by are set from current logged-in user.
+        """
+        designation_repo = self._require_designation_repo()
+        designation_data = self._clean_payload(designation_data)
+
+        code = designation_data.get("code")
+        if not code:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Designation code is required",
+            )
+
+        if await designation_repo.code_exists(code):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Designation code '{code}' already exists",
+            )
+
+        await self._validate_designation_department(
+            designation_data.get("department_id")
+        )
+
+        designation_data["created_by"] = created_by
+        designation_data["updated_by"] = created_by
+
+        try:
+            designation_id = await designation_repo.create(designation_data)
+
+        except DuplicateKeyError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Designation code '{code}' already exists",
+            )
+
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create designation",
+            )
+
+        designation = await designation_repo.find_by_id(designation_id)
+
+        if not designation:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Designation created but failed to retrieve",
+            )
+
+        return designation
+
+    async def get_designation_by_id(
+        self,
+        designation_id: str,
+        include_details: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Get designation by ID.
+        """
+        designation_repo = self._require_designation_repo()
+
+        designation = await designation_repo.find_by_id(designation_id)
+
+        if not designation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Designation with ID '{designation_id}' not found",
+            )
+
+        if include_details:
+            designation = await self._enrich_designation_details(designation)
+
+        return designation
+
+    async def list_designations(
+        self,
+        is_active: Optional[bool] = None,
+        department_id: Optional[str] = None,
+        level: Optional[int] = None,
+        search: Optional[str] = None,
+        sort_by: str = "display_order",
+        sort_order: str = "asc",
+        skip: int = 0,
+        limit: int = 50,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        List designations with filtering, search, sorting, and pagination.
+        """
+        designation_repo = self._require_designation_repo()
+
+        designations = await designation_repo.list_all(
+            is_active=is_active,
+            department_id=department_id,
+            level=level,
+            search=search,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            skip=skip,
+            limit=limit,
+        )
+
+        total_count = await designation_repo.count(
+            is_active=is_active,
+            department_id=department_id,
+            level=level,
+            search=search,
+        )
+
+        return designations, total_count
+
+    async def list_designations_for_dropdown(
+        self,
+        department_id: Optional[str] = None,
+        include_global: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """
+        List active designations for frontend dropdowns.
+        """
+        designation_repo = self._require_designation_repo()
+
+        return await designation_repo.list_active_for_dropdown(
+            department_id=department_id,
+            include_global=include_global,
+        )
+
+    async def update_designation(
+        self,
+        designation_id: str,
+        update_data: Dict[str, Any],
+        updated_by: str,
+    ) -> Dict[str, Any]:
+        """
+        Update designation fields.
+        """
+        designation_repo = self._require_designation_repo()
+        update_data = self._clean_payload(update_data)
+
+        if not update_data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No valid fields provided for update",
+            )
+
+        existing_designation = await designation_repo.find_by_id(designation_id)
+
+        if not existing_designation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Designation with ID '{designation_id}' not found",
+            )
+
+        new_code = update_data.get("code")
+        existing_code = existing_designation.get("code")
+
+        if new_code and new_code != existing_code:
+            if await designation_repo.code_exists(
+                code=new_code,
+                exclude_id=designation_id,
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Designation code '{new_code}' already exists",
+                )
+
+        if "department_id" in update_data:
+            await self._validate_designation_department(
+                update_data.get("department_id")
+            )
+
+        update_data["updated_by"] = updated_by
+
+        try:
+            updated = await designation_repo.update(
+                designation_id=designation_id,
+                update_data=update_data,
+            )
+
+        except DuplicateKeyError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Designation code '{new_code}' already exists",
+            )
+
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update designation",
+            )
+
+        if not updated:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update designation",
+            )
+
+        designation = await designation_repo.find_by_id(designation_id)
+
+        if not designation:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Designation updated but failed to retrieve",
+            )
+
+        return designation
+
+    async def deactivate_designation(
+        self,
+        designation_id: str,
+        updated_by: str,
+    ) -> bool:
+        """
+        Deactivate a designation using soft delete.
+        """
+        designation_repo = self._require_designation_repo()
+
+        designation = await designation_repo.find_by_id(designation_id)
+
+        if not designation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Designation with ID '{designation_id}' not found",
+            )
+
+        if not designation.get("is_active", False):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Designation is already inactive",
+            )
+
+        # TODO:
+        # After employee module is created:
+        # Do not allow deactivation if active employees use this designation.
+
+        deactivated = await designation_repo.deactivate(
+            designation_id=designation_id,
+            updated_by=updated_by,
+        )
+
+        if not deactivated:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to deactivate designation",
+            )
+
+        return True
+
+    async def activate_designation(
+        self,
+        designation_id: str,
+        updated_by: str,
+    ) -> Dict[str, Any]:
+        """
+        Reactivate an inactive designation.
+        """
+        designation_repo = self._require_designation_repo()
+
+        designation = await designation_repo.find_by_id(designation_id)
+
+        if not designation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Designation with ID '{designation_id}' not found",
+            )
+
+        if designation.get("is_active", False):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Designation is already active",
+            )
+
+        department_id = designation.get("department_id")
+        if department_id:
+            await self._validate_designation_department(department_id)
+
+        activated = await designation_repo.activate(
+            designation_id=designation_id,
+            updated_by=updated_by,
+        )
+
+        if not activated:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to activate designation",
+            )
+
+        activated_designation = await designation_repo.find_by_id(designation_id)
+
+        if not activated_designation:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Designation activated but failed to retrieve",
+            )
+
+        return activated_designation
+
+    async def bulk_import_designations(
+        self,
+        designations: List[Dict[str, Any]],
+        created_by: str,
+        skip_duplicates: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Bulk import designations.
+        """
+        designation_repo = self._require_designation_repo()
+
+        if not designations:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Designations list cannot be empty",
+            )
+
+        prepared_designations: List[Dict[str, Any]] = []
+        skipped: List[Dict[str, Any]] = []
+        failed: List[Dict[str, Any]] = []
+        seen_codes: set[str] = set()
+
+        for index, raw_designation in enumerate(designations):
+            try:
+                designation_data = self._clean_payload(dict(raw_designation))
+
+                code = designation_data.get("code")
+                if not code:
+                    failed.append(
+                        {
+                            "index": index,
+                            "code": None,
+                            "error": "Designation code is required",
+                        }
+                    )
+                    continue
+
+                normalized_code = code.strip().upper()
+
+                if normalized_code in seen_codes:
+                    duplicate_error = {
+                        "index": index,
+                        "code": normalized_code,
+                        "error": "Duplicate designation code inside import payload",
+                    }
+
+                    if skip_duplicates:
+                        skipped.append(duplicate_error)
+                        continue
+
+                    failed.append(duplicate_error)
+                    continue
+
+                if await designation_repo.code_exists(normalized_code):
+                    duplicate_error = {
+                        "index": index,
+                        "code": normalized_code,
+                        "error": "Designation code already exists",
+                    }
+
+                    if skip_duplicates:
+                        skipped.append(duplicate_error)
+                        continue
+
+                    failed.append(duplicate_error)
+                    continue
+
+                await self._validate_designation_department(
+                    designation_data.get("department_id")
+                )
+
+                designation_data["created_by"] = created_by
+                designation_data["updated_by"] = created_by
+
+                prepared_designations.append(designation_data)
+                seen_codes.add(normalized_code)
+
+            except HTTPException as exc:
+                failed.append(
+                    {
+                        "index": index,
+                        "code": raw_designation.get("code"),
+                        "error": exc.detail,
+                    }
+                )
+
+            except Exception as exc:
+                failed.append(
+                    {
+                        "index": index,
+                        "code": raw_designation.get("code"),
+                        "error": str(exc),
+                    }
+                )
+
+        created_ids, insert_errors = await designation_repo.create_many(
+            prepared_designations
+        )
+
+        failed.extend(insert_errors)
+
+        return {
+            "message": "Bulk designation import completed",
+            "created_count": len(created_ids),
+            "skipped_count": len(skipped),
+            "failed_count": len(failed),
+            "created_ids": created_ids,
+            "errors": skipped + failed,
+        }
+
+    async def get_designation_statistics(self) -> Dict[str, Any]:
+        """
+        Get designation statistics.
+        """
+        designation_repo = self._require_designation_repo()
+        return await designation_repo.get_statistics()
