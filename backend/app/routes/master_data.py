@@ -4,8 +4,9 @@ Master Data routes.
 All master data endpoints for:
 - Departments
 - Designations
-- Leave Types (future)
-- Claim Types (future)
+- Leave Types
+- Claim Types
+- Holidays
 
 Pattern:
 Route -> Master Data Service -> Repository -> MongoDB
@@ -16,6 +17,7 @@ Access Control:
 - Admin only can bulk import
 """
 
+from datetime import date
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, Query, status
@@ -27,16 +29,35 @@ from backend.app.dependencies.auth_dependencies import (
     require_admin,
     require_hr,
 )
+from backend.app.repositories.claim_type_repository import ClaimTypeRepository
 from backend.app.repositories.department_repository import DepartmentRepository
 from backend.app.repositories.designation_repository import DesignationRepository
+from backend.app.repositories.holiday_repository import HolidayRepository
+from backend.app.repositories.leave_type_repository import LeaveTypeRepository
 from backend.app.repositories.user_repository import UserRepository
 from backend.app.schemas.master_data_schema import (
+    BulkClaimTypeImportRequest,
+    BulkClaimTypeImportResponse,
     BulkDepartmentImportRequest,
     BulkDepartmentImportResponse,
     BulkDesignationImportRequest,
     BulkDesignationImportResponse,
+    BulkHolidayImportRequest,
+    BulkHolidayImportResponse,
+    BulkLeaveTypeImportRequest,
+    BulkLeaveTypeImportResponse,
+    ClaimTypeCreatedResponse,
+    ClaimTypeDeactivatedResponse,
+    ClaimTypeDetailResponse,
+    ClaimTypeDropdownResponse,
+    ClaimTypeListResponse,
+    ClaimTypeStatisticsResponse,
+    ClaimTypeUpdatedResponse,
+    CreateClaimTypeRequest,
     CreateDepartmentRequest,
     CreateDesignationRequest,
+    CreateHolidayRequest,
+    CreateLeaveTypeRequest,
     DepartmentCreatedResponse,
     DepartmentDeactivatedResponse,
     DepartmentDetailResponse,
@@ -48,8 +69,26 @@ from backend.app.schemas.master_data_schema import (
     DesignationDropdownResponse,
     DesignationListResponse,
     DesignationUpdatedResponse,
+    HolidayCalendarResponse,
+    HolidayCreatedResponse,
+    HolidayDeactivatedResponse,
+    HolidayDetailResponse,
+    HolidayDropdownResponse,
+    HolidayListResponse,
+    HolidayStatisticsResponse,
+    HolidayUpdatedResponse,
+    LeaveTypeCreatedResponse,
+    LeaveTypeDeactivatedResponse,
+    LeaveTypeDetailResponse,
+    LeaveTypeDropdownResponse,
+    LeaveTypeListResponse,
+    LeaveTypeStatisticsResponse,
+    LeaveTypeUpdatedResponse,
+    UpdateClaimTypeRequest,
     UpdateDepartmentRequest,
     UpdateDesignationRequest,
+    UpdateHolidayRequest,
+    UpdateLeaveTypeRequest,
 )
 from backend.app.services.master_data_service import MasterDataService
 
@@ -67,21 +106,21 @@ async def get_master_data_service(
 ) -> MasterDataService:
     """
     Create MasterDataService instance with all dependencies.
-
-    Dependencies:
-    - DepartmentRepository uses MongoDB
-    - DesignationRepository uses MongoDB
-    - UserRepository is currently used for department head validation
-      Later, this should be replaced with EmployeeRepository.
     """
 
     department_repo = DepartmentRepository(db)
     designation_repo = DesignationRepository(db)
+    leave_type_repo = LeaveTypeRepository(db)
+    claim_type_repo = ClaimTypeRepository(db)
+    holiday_repo = HolidayRepository(db)
     user_repo = UserRepository(db)
 
     return MasterDataService(
         department_repo=department_repo,
         designation_repo=designation_repo,
+        leave_type_repo=leave_type_repo,
+        claim_type_repo=claim_type_repo,
+        holiday_repo=holiday_repo,
         user_repo=user_repo,
     )
 
@@ -89,10 +128,8 @@ async def get_master_data_service(
 def get_actor_id(current_user: dict) -> str:
     """
     Extract logged-in user's ID from current_user.
-
-    UserRepository currently returns MongoDB _id as string.
-    Some future repositories may also expose id.
     """
+
     actor_id = current_user.get("id") or current_user.get("_id")
 
     if not actor_id:
@@ -111,21 +148,12 @@ def get_actor_id(current_user: dict) -> str:
     response_model=DepartmentCreatedResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create new department",
-    description=(
-        "Create a new department. "
-        "Department code must be unique. "
-        "Requires HR or Admin role."
-    ),
 )
 async def create_department(
     request: CreateDepartmentRequest,
     current_user: Annotated[dict, Depends(require_hr)],
     service: Annotated[MasterDataService, Depends(get_master_data_service)],
 ):
-    """
-    Create a new department.
-    """
-
     created_by = get_actor_id(current_user)
 
     department = await service.create_department(
@@ -145,58 +173,22 @@ async def create_department(
     response_model=dict,
     status_code=status.HTTP_200_OK,
     summary="List departments",
-    description=(
-        "List departments with filtering, search, sorting, and pagination. "
-        "All authenticated users can access this endpoint."
-    ),
 )
 async def list_departments(
     _current_user: Annotated[dict, Depends(get_current_active_user)],
     service: Annotated[MasterDataService, Depends(get_master_data_service)],
-    is_active: Optional[bool] = Query(
-        None,
-        description="Filter by active status. Omit to get all departments.",
-    ),
-    location: Optional[str] = Query(
-        None,
-        description="Filter by location or branch.",
-    ),
-    parent_id: Optional[str] = Query(
-        None,
-        description="Filter by parent department ID.",
-    ),
-    search: Optional[str] = Query(
-        None,
-        min_length=2,
-        max_length=100,
-        description="Search in department name, code, description, or location.",
-    ),
+    is_active: Optional[bool] = Query(None),
+    location: Optional[str] = Query(None),
+    parent_id: Optional[str] = Query(None),
+    search: Optional[str] = Query(None, min_length=2, max_length=100),
     sort_by: str = Query(
         "display_order",
-        description="Sort field.",
         pattern="^(display_order|name|code|created_at|updated_at)$",
     ),
-    sort_order: str = Query(
-        "asc",
-        description="Sort order.",
-        pattern="^(asc|desc)$",
-    ),
-    skip: int = Query(
-        0,
-        ge=0,
-        description="Number of records to skip for pagination.",
-    ),
-    limit: int = Query(
-        50,
-        ge=1,
-        le=100,
-        description="Maximum number of records to return.",
-    ),
+    sort_order: str = Query("asc", pattern="^(asc|desc)$"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
 ):
-    """
-    List departments with filtering, search, sorting, and pagination.
-    """
-
     departments, total_count = await service.list_departments(
         is_active=is_active,
         location=location,
@@ -224,23 +216,11 @@ async def list_departments(
     response_model=dict,
     status_code=status.HTTP_200_OK,
     summary="Get department statistics",
-    description=(
-        "Get department statistics for HR/Admin dashboard. "
-        "Requires HR or Admin role."
-    ),
 )
 async def get_department_statistics(
     _current_user: Annotated[dict, Depends(require_hr)],
     service: Annotated[MasterDataService, Depends(get_master_data_service)],
 ):
-    """
-    Get department statistics.
-
-    Important:
-    This route must stay before /departments/{department_id}
-    so FastAPI does not treat 'statistics' as department_id.
-    """
-
     return await service.get_department_statistics()
 
 
@@ -249,21 +229,12 @@ async def get_department_statistics(
     response_model=BulkDepartmentImportResponse,
     status_code=status.HTTP_200_OK,
     summary="Bulk import departments",
-    description=(
-        "Bulk import multiple departments. "
-        "Useful during initial company setup or migration. "
-        "Requires Admin role only."
-    ),
 )
 async def bulk_import_departments(
     request: BulkDepartmentImportRequest,
     current_user: Annotated[dict, Depends(require_admin)],
     service: Annotated[MasterDataService, Depends(get_master_data_service)],
 ):
-    """
-    Bulk import departments.
-    """
-
     created_by = get_actor_id(current_user)
 
     departments_data = [
@@ -285,22 +256,12 @@ async def bulk_import_departments(
     response_model=DepartmentDetailResponse,
     status_code=status.HTTP_200_OK,
     summary="Get department by ID",
-    description=(
-        "Get department details by ID. "
-        "Includes enriched data such as head name, parent name, "
-        "employee count, and children count. "
-        "All authenticated users can access this endpoint."
-    ),
 )
 async def get_department(
     department_id: str,
     _current_user: Annotated[dict, Depends(get_current_active_user)],
     service: Annotated[MasterDataService, Depends(get_master_data_service)],
 ):
-    """
-    Get department by ID with enriched details.
-    """
-
     department = await service.get_department_by_id(
         department_id=department_id,
         include_details=True,
@@ -314,11 +275,6 @@ async def get_department(
     response_model=DepartmentUpdatedResponse,
     status_code=status.HTTP_200_OK,
     summary="Update department",
-    description=(
-        "Update department fields. "
-        "All fields are optional. Only provided fields are updated. "
-        "Requires HR or Admin role."
-    ),
 )
 async def update_department(
     department_id: str,
@@ -326,10 +282,6 @@ async def update_department(
     current_user: Annotated[dict, Depends(require_hr)],
     service: Annotated[MasterDataService, Depends(get_master_data_service)],
 ):
-    """
-    Update department fields.
-    """
-
     updated_by = get_actor_id(current_user)
 
     department = await service.update_department(
@@ -349,22 +301,12 @@ async def update_department(
     response_model=DepartmentDeactivatedResponse,
     status_code=status.HTTP_200_OK,
     summary="Deactivate department",
-    description=(
-        "Deactivate department using soft delete. "
-        "The document remains in MongoDB but is_active=False. "
-        "Cannot deactivate if department has active child departments. "
-        "Requires HR or Admin role."
-    ),
 )
 async def deactivate_department(
     department_id: str,
     current_user: Annotated[dict, Depends(require_hr)],
     service: Annotated[MasterDataService, Depends(get_master_data_service)],
 ):
-    """
-    Deactivate department.
-    """
-
     updated_by = get_actor_id(current_user)
 
     await service.deactivate_department(
@@ -383,21 +325,12 @@ async def deactivate_department(
     response_model=DepartmentUpdatedResponse,
     status_code=status.HTTP_200_OK,
     summary="Reactivate department",
-    description=(
-        "Reactivate an inactive department. "
-        "If the department has a parent, parent must be active. "
-        "Requires HR or Admin role."
-    ),
 )
 async def activate_department(
     department_id: str,
     current_user: Annotated[dict, Depends(require_hr)],
     service: Annotated[MasterDataService, Depends(get_master_data_service)],
 ):
-    """
-    Reactivate an inactive department.
-    """
-
     updated_by = get_actor_id(current_user)
 
     department = await service.activate_department(
@@ -421,26 +354,12 @@ async def activate_department(
     response_model=DesignationCreatedResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create new designation",
-    description=(
-        "Create a new designation. "
-        "Designation code must be unique. "
-        "Requires HR or Admin role."
-    ),
 )
 async def create_designation(
     request: CreateDesignationRequest,
     current_user: Annotated[dict, Depends(require_hr)],
     service: Annotated[MasterDataService, Depends(get_master_data_service)],
 ):
-    """
-    Create a new designation.
-
-    Business rules:
-    - Designation code must be unique.
-    - department_id is optional.
-    - If department_id is provided, department must exist and be active.
-    """
-
     created_by = get_actor_id(current_user)
 
     designation = await service.create_designation(
@@ -460,60 +379,22 @@ async def create_designation(
     response_model=dict,
     status_code=status.HTTP_200_OK,
     summary="List designations",
-    description=(
-        "List designations with filtering, search, sorting, and pagination. "
-        "All authenticated users can access this endpoint."
-    ),
 )
 async def list_designations(
     _current_user: Annotated[dict, Depends(get_current_active_user)],
     service: Annotated[MasterDataService, Depends(get_master_data_service)],
-    is_active: Optional[bool] = Query(
-        None,
-        description="Filter by active status. Omit to get all designations.",
-    ),
-    department_id: Optional[str] = Query(
-        None,
-        description="Filter by department ID.",
-    ),
-    level: Optional[int] = Query(
-        None,
-        ge=1,
-        le=10,
-        description="Filter by career level.",
-    ),
-    search: Optional[str] = Query(
-        None,
-        min_length=2,
-        max_length=100,
-        description="Search in designation name, code, or description.",
-    ),
+    is_active: Optional[bool] = Query(None),
+    department_id: Optional[str] = Query(None),
+    level: Optional[int] = Query(None, ge=1, le=10),
+    search: Optional[str] = Query(None, min_length=2, max_length=100),
     sort_by: str = Query(
         "display_order",
-        description="Sort field.",
         pattern="^(display_order|name|code|level|department_id|created_at|updated_at)$",
     ),
-    sort_order: str = Query(
-        "asc",
-        description="Sort order.",
-        pattern="^(asc|desc)$",
-    ),
-    skip: int = Query(
-        0,
-        ge=0,
-        description="Number of records to skip for pagination.",
-    ),
-    limit: int = Query(
-        50,
-        ge=1,
-        le=100,
-        description="Maximum number of records to return.",
-    ),
+    sort_order: str = Query("asc", pattern="^(asc|desc)$"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
 ):
-    """
-    List designations with filtering, search, sorting, and pagination.
-    """
-
     designations, total_count = await service.list_designations(
         is_active=is_active,
         department_id=department_id,
@@ -541,33 +422,14 @@ async def list_designations(
     response_model=list[DesignationDropdownResponse],
     status_code=status.HTTP_200_OK,
     summary="List active designations for dropdown",
-    description=(
-        "Return lightweight active designation list for frontend dropdowns. "
-        "All authenticated users can access this endpoint."
-    ),
 )
 async def list_designations_dropdown(
     _current_user: Annotated[dict, Depends(get_current_active_user)],
     service: Annotated[MasterDataService, Depends(get_master_data_service)],
-    department_id: Optional[str] = Query(
-        None,
-        description="Optional department ID. If provided, returns department-specific and global designations.",
-    ),
-    include_global: bool = Query(
-        True,
-        description="Include global designations where department_id is not set.",
-    ),
+    department_id: Optional[str] = Query(None),
 ):
-    """
-    List active designations for frontend dropdowns.
-
-    Important:
-    This route must stay before /designations/{designation_id}.
-    """
-
     designations = await service.list_designations_for_dropdown(
         department_id=department_id,
-        include_global=include_global,
     )
 
     return [
@@ -581,22 +443,11 @@ async def list_designations_dropdown(
     response_model=dict,
     status_code=status.HTTP_200_OK,
     summary="Get designation statistics",
-    description=(
-        "Get designation statistics for HR/Admin dashboard. "
-        "Requires HR or Admin role."
-    ),
 )
 async def get_designation_statistics(
     _current_user: Annotated[dict, Depends(require_hr)],
     service: Annotated[MasterDataService, Depends(get_master_data_service)],
 ):
-    """
-    Get designation statistics.
-
-    Important:
-    This route must stay before /designations/{designation_id}.
-    """
-
     return await service.get_designation_statistics()
 
 
@@ -605,24 +456,12 @@ async def get_designation_statistics(
     response_model=BulkDesignationImportResponse,
     status_code=status.HTTP_200_OK,
     summary="Bulk import designations",
-    description=(
-        "Bulk import multiple designations. "
-        "Useful during initial company setup or migration. "
-        "Requires Admin role only."
-    ),
 )
 async def bulk_import_designations(
     request: BulkDesignationImportRequest,
     current_user: Annotated[dict, Depends(require_admin)],
     service: Annotated[MasterDataService, Depends(get_master_data_service)],
 ):
-    """
-    Bulk import designations.
-
-    Important:
-    This route must stay before /designations/{designation_id}.
-    """
-
     created_by = get_actor_id(current_user)
 
     designations_data = [
@@ -644,22 +483,12 @@ async def bulk_import_designations(
     response_model=DesignationDetailResponse,
     status_code=status.HTTP_200_OK,
     summary="Get designation by ID",
-    description=(
-        "Get designation details by ID. "
-        "Includes enriched data such as department name, department code, "
-        "and employee count. "
-        "All authenticated users can access this endpoint."
-    ),
 )
 async def get_designation(
     designation_id: str,
     _current_user: Annotated[dict, Depends(get_current_active_user)],
     service: Annotated[MasterDataService, Depends(get_master_data_service)],
 ):
-    """
-    Get designation by ID with enriched details.
-    """
-
     designation = await service.get_designation_by_id(
         designation_id=designation_id,
         include_details=True,
@@ -673,11 +502,6 @@ async def get_designation(
     response_model=DesignationUpdatedResponse,
     status_code=status.HTTP_200_OK,
     summary="Update designation",
-    description=(
-        "Update designation fields. "
-        "All fields are optional. Only provided fields are updated. "
-        "Requires HR or Admin role."
-    ),
 )
 async def update_designation(
     designation_id: str,
@@ -685,10 +509,6 @@ async def update_designation(
     current_user: Annotated[dict, Depends(require_hr)],
     service: Annotated[MasterDataService, Depends(get_master_data_service)],
 ):
-    """
-    Update designation fields.
-    """
-
     updated_by = get_actor_id(current_user)
 
     designation = await service.update_designation(
@@ -708,21 +528,12 @@ async def update_designation(
     response_model=DesignationDeactivatedResponse,
     status_code=status.HTTP_200_OK,
     summary="Deactivate designation",
-    description=(
-        "Deactivate designation using soft delete. "
-        "The document remains in MongoDB but is_active=False. "
-        "Requires HR or Admin role."
-    ),
 )
 async def deactivate_designation(
     designation_id: str,
     current_user: Annotated[dict, Depends(require_hr)],
     service: Annotated[MasterDataService, Depends(get_master_data_service)],
 ):
-    """
-    Deactivate designation.
-    """
-
     updated_by = get_actor_id(current_user)
 
     await service.deactivate_designation(
@@ -741,21 +552,12 @@ async def deactivate_designation(
     response_model=DesignationUpdatedResponse,
     status_code=status.HTTP_200_OK,
     summary="Reactivate designation",
-    description=(
-        "Reactivate an inactive designation. "
-        "If the designation is linked to a department, department must be active. "
-        "Requires HR or Admin role."
-    ),
 )
 async def activate_designation(
     designation_id: str,
     current_user: Annotated[dict, Depends(require_hr)],
     service: Annotated[MasterDataService, Depends(get_master_data_service)],
 ):
-    """
-    Reactivate an inactive designation.
-    """
-
     updated_by = get_actor_id(current_user)
 
     designation = await service.activate_designation(
@@ -770,24 +572,837 @@ async def activate_designation(
 
 
 # -------------------------
-# Future: Leave Type Routes
+# Leave Type Routes
 # -------------------------
 
-# TODO: Add leave type endpoints after creating leave_type_model.py
-# POST   /api/v1/master-data/leave-types
-# GET    /api/v1/master-data/leave-types
-# GET    /api/v1/master-data/leave-types/{id}
-# PATCH  /api/v1/master-data/leave-types/{id}
-# DELETE /api/v1/master-data/leave-types/{id}
+
+@router.post(
+    "/leave-types",
+    response_model=LeaveTypeCreatedResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create new leave type",
+)
+async def create_leave_type(
+    request: CreateLeaveTypeRequest,
+    current_user: Annotated[dict, Depends(require_hr)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    created_by = get_actor_id(current_user)
+
+    leave_type = await service.create_leave_type(
+        leave_type_data=request.model_dump(exclude_none=True),
+        created_by=created_by,
+    )
+
+    return LeaveTypeCreatedResponse(
+        message="Leave type created successfully",
+        leave_type_id=leave_type.get("id") or leave_type.get("_id"),
+        leave_type=LeaveTypeListResponse(**leave_type),
+    )
+
+
+@router.get(
+    "/leave-types",
+    response_model=dict,
+    status_code=status.HTTP_200_OK,
+    summary="List leave types",
+)
+async def list_leave_types(
+    _current_user: Annotated[dict, Depends(get_current_active_user)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+    is_active: Optional[bool] = Query(None),
+    is_paid: Optional[bool] = Query(None),
+    requires_approval: Optional[bool] = Query(None),
+    requires_documentation: Optional[bool] = Query(None),
+    carry_forward_allowed: Optional[bool] = Query(None),
+    encashment_allowed: Optional[bool] = Query(None),
+    is_accrued: Optional[bool] = Query(None),
+    available_during_probation: Optional[bool] = Query(None),
+    gender_specific: Optional[str] = Query(None, pattern="^(male|female)$"),
+    search: Optional[str] = Query(None, min_length=2, max_length=100),
+    sort_by: str = Query(
+        "display_order",
+        pattern=(
+            "^(display_order|name|code|default_annual_grant|max_annual_limit|"
+            "min_notice_days|is_paid|requires_approval|requires_documentation|"
+            "carry_forward_allowed|encashment_allowed|is_accrued|created_at|updated_at)$"
+        ),
+    ),
+    sort_order: str = Query("asc", pattern="^(asc|desc)$"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+):
+    leave_types, total_count = await service.list_leave_types(
+        is_active=is_active,
+        is_paid=is_paid,
+        requires_approval=requires_approval,
+        requires_documentation=requires_documentation,
+        carry_forward_allowed=carry_forward_allowed,
+        encashment_allowed=encashment_allowed,
+        is_accrued=is_accrued,
+        available_during_probation=available_during_probation,
+        gender_specific=gender_specific,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        skip=skip,
+        limit=limit,
+    )
+
+    return {
+        "leave_types": [
+            LeaveTypeListResponse(**leave_type)
+            for leave_type in leave_types
+        ],
+        "total": total_count,
+        "skip": skip,
+        "limit": limit,
+    }
+
+
+@router.get(
+    "/leave-types/dropdown",
+    response_model=list[LeaveTypeDropdownResponse],
+    status_code=status.HTTP_200_OK,
+    summary="List active leave types for dropdown",
+)
+async def list_leave_types_dropdown(
+    _current_user: Annotated[dict, Depends(get_current_active_user)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+    gender: Optional[str] = Query(None, pattern="^(male|female)$"),
+    include_unpaid: bool = Query(True),
+):
+    leave_types = await service.list_leave_types_for_dropdown(
+        gender=gender,
+        include_unpaid=include_unpaid,
+    )
+
+    return [
+        LeaveTypeDropdownResponse(**leave_type)
+        for leave_type in leave_types
+    ]
+
+
+@router.get(
+    "/leave-types/statistics",
+    response_model=LeaveTypeStatisticsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get leave type statistics",
+)
+async def get_leave_type_statistics(
+    _current_user: Annotated[dict, Depends(require_hr)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    statistics = await service.get_leave_type_statistics()
+    return LeaveTypeStatisticsResponse(**statistics)
+
+
+@router.post(
+    "/leave-types/bulk-import",
+    response_model=BulkLeaveTypeImportResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Bulk import leave types",
+)
+async def bulk_import_leave_types(
+    request: BulkLeaveTypeImportRequest,
+    current_user: Annotated[dict, Depends(require_admin)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    created_by = get_actor_id(current_user)
+
+    leave_types_data = [
+        leave_type.model_dump(exclude_none=True)
+        for leave_type in request.leave_types
+    ]
+
+    result = await service.bulk_import_leave_types(
+        leave_types=leave_types_data,
+        created_by=created_by,
+        skip_duplicates=request.skip_duplicates,
+    )
+
+    return BulkLeaveTypeImportResponse(**result)
+
+
+@router.get(
+    "/leave-types/{leave_type_id}/rules",
+    response_model=dict,
+    status_code=status.HTTP_200_OK,
+    summary="Get active leave type rules by ID",
+)
+async def get_leave_type_rules(
+    leave_type_id: str,
+    _current_user: Annotated[dict, Depends(get_current_active_user)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    return await service.get_leave_type_rules_by_id(
+        leave_type_id=leave_type_id,
+    )
+
+
+@router.get(
+    "/leave-types/{leave_type_id}",
+    response_model=LeaveTypeDetailResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get leave type by ID",
+)
+async def get_leave_type(
+    leave_type_id: str,
+    _current_user: Annotated[dict, Depends(get_current_active_user)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    leave_type = await service.get_leave_type_by_id(
+        leave_type_id=leave_type_id,
+        include_details=True,
+    )
+
+    return LeaveTypeDetailResponse(**leave_type)
+
+
+@router.patch(
+    "/leave-types/{leave_type_id}",
+    response_model=LeaveTypeUpdatedResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update leave type",
+)
+async def update_leave_type(
+    leave_type_id: str,
+    request: UpdateLeaveTypeRequest,
+    current_user: Annotated[dict, Depends(require_hr)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    updated_by = get_actor_id(current_user)
+
+    leave_type = await service.update_leave_type(
+        leave_type_id=leave_type_id,
+        update_data=request.model_dump(exclude_none=True),
+        updated_by=updated_by,
+    )
+
+    return LeaveTypeUpdatedResponse(
+        message="Leave type updated successfully",
+        leave_type=LeaveTypeListResponse(**leave_type),
+    )
+
+
+@router.delete(
+    "/leave-types/{leave_type_id}",
+    response_model=LeaveTypeDeactivatedResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Deactivate leave type",
+)
+async def deactivate_leave_type(
+    leave_type_id: str,
+    current_user: Annotated[dict, Depends(require_hr)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    updated_by = get_actor_id(current_user)
+
+    await service.deactivate_leave_type(
+        leave_type_id=leave_type_id,
+        updated_by=updated_by,
+    )
+
+    return LeaveTypeDeactivatedResponse(
+        message="Leave type deactivated successfully",
+        leave_type_id=leave_type_id,
+    )
+
+
+@router.patch(
+    "/leave-types/{leave_type_id}/activate",
+    response_model=LeaveTypeUpdatedResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Reactivate leave type",
+)
+async def activate_leave_type(
+    leave_type_id: str,
+    current_user: Annotated[dict, Depends(require_hr)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    updated_by = get_actor_id(current_user)
+
+    leave_type = await service.activate_leave_type(
+        leave_type_id=leave_type_id,
+        updated_by=updated_by,
+    )
+
+    return LeaveTypeUpdatedResponse(
+        message="Leave type activated successfully",
+        leave_type=LeaveTypeListResponse(**leave_type),
+    )
 
 
 # -------------------------
-# Future: Claim Type Routes
+# Claim Type Routes
 # -------------------------
 
-# TODO: Add claim type endpoints after creating claim_type_model.py
-# POST   /api/v1/master-data/claim-types
-# GET    /api/v1/master-data/claim-types
-# GET    /api/v1/master-data/claim-types/{id}
-# PATCH  /api/v1/master-data/claim-types/{id}
-# DELETE /api/v1/master-data/claim-types/{id}
+
+@router.post(
+    "/claim-types",
+    response_model=ClaimTypeCreatedResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create new claim type",
+)
+async def create_claim_type(
+    request: CreateClaimTypeRequest,
+    current_user: Annotated[dict, Depends(require_hr)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    created_by = get_actor_id(current_user)
+
+    claim_type = await service.create_claim_type(
+        claim_type_data=request.model_dump(exclude_none=True),
+        created_by=created_by,
+    )
+
+    return ClaimTypeCreatedResponse(
+        message="Claim type created successfully",
+        claim_type_id=claim_type.get("id") or claim_type.get("_id"),
+        claim_type=ClaimTypeListResponse(**claim_type),
+    )
+
+
+@router.get(
+    "/claim-types",
+    response_model=dict,
+    status_code=status.HTTP_200_OK,
+    summary="List claim types",
+)
+async def list_claim_types(
+    _current_user: Annotated[dict, Depends(get_current_active_user)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+    is_active: Optional[bool] = Query(None),
+    requires_bill: Optional[bool] = Query(None),
+    requires_approval: Optional[bool] = Query(None),
+    is_taxable: Optional[bool] = Query(None),
+    currency: Optional[str] = Query(None, min_length=3, max_length=3),
+    search: Optional[str] = Query(None, min_length=2, max_length=100),
+    sort_by: str = Query(
+        "display_order",
+        pattern=(
+            "^(display_order|name|code|default_annual_limit|default_monthly_limit|"
+            "max_claim_amount|min_claim_amount|requires_bill|requires_approval|"
+            "is_taxable|currency|created_at|updated_at)$"
+        ),
+    ),
+    sort_order: str = Query("asc", pattern="^(asc|desc)$"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+):
+    claim_types, total_count = await service.list_claim_types(
+        is_active=is_active,
+        requires_bill=requires_bill,
+        requires_approval=requires_approval,
+        is_taxable=is_taxable,
+        currency=currency,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        skip=skip,
+        limit=limit,
+    )
+
+    return {
+        "claim_types": [
+            ClaimTypeListResponse(**claim_type)
+            for claim_type in claim_types
+        ],
+        "total": total_count,
+        "skip": skip,
+        "limit": limit,
+    }
+
+
+@router.get(
+    "/claim-types/dropdown",
+    response_model=list[ClaimTypeDropdownResponse],
+    status_code=status.HTTP_200_OK,
+    summary="List active claim types for dropdown",
+)
+async def list_claim_types_dropdown(
+    _current_user: Annotated[dict, Depends(get_current_active_user)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+    include_taxable: bool = Query(True),
+):
+    claim_types = await service.list_claim_types_for_dropdown(
+        include_taxable=include_taxable,
+    )
+
+    return [
+        ClaimTypeDropdownResponse(**claim_type)
+        for claim_type in claim_types
+    ]
+
+
+@router.get(
+    "/claim-types/statistics",
+    response_model=ClaimTypeStatisticsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get claim type statistics",
+)
+async def get_claim_type_statistics(
+    _current_user: Annotated[dict, Depends(require_hr)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    statistics = await service.get_claim_type_statistics()
+    return ClaimTypeStatisticsResponse(**statistics)
+
+
+@router.post(
+    "/claim-types/bulk-import",
+    response_model=BulkClaimTypeImportResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Bulk import claim types",
+)
+async def bulk_import_claim_types(
+    request: BulkClaimTypeImportRequest,
+    current_user: Annotated[dict, Depends(require_admin)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    created_by = get_actor_id(current_user)
+
+    claim_types_data = [
+        claim_type.model_dump(exclude_none=True)
+        for claim_type in request.claim_types
+    ]
+
+    result = await service.bulk_import_claim_types(
+        claim_types=claim_types_data,
+        created_by=created_by,
+        skip_duplicates=request.skip_duplicates,
+    )
+
+    return BulkClaimTypeImportResponse(**result)
+
+
+@router.patch(
+    "/claim-types/bulk-update-limits",
+    response_model=dict,
+    status_code=status.HTTP_200_OK,
+    summary="Bulk update claim type limits",
+)
+async def bulk_update_claim_type_limits(
+    updates: list[dict],
+    current_user: Annotated[dict, Depends(require_admin)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    updated_by = get_actor_id(current_user)
+
+    return await service.bulk_update_claim_type_limits(
+        updates=updates,
+        updated_by=updated_by,
+    )
+
+
+@router.get(
+    "/claim-types/{claim_type_id}/rules",
+    response_model=dict,
+    status_code=status.HTTP_200_OK,
+    summary="Get active claim type rules by ID",
+)
+async def get_claim_type_rules(
+    claim_type_id: str,
+    _current_user: Annotated[dict, Depends(get_current_active_user)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    return await service.get_claim_type_rules_by_id(
+        claim_type_id=claim_type_id,
+    )
+
+
+@router.get(
+    "/claim-types/{claim_type_id}",
+    response_model=ClaimTypeDetailResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get claim type by ID",
+)
+async def get_claim_type(
+    claim_type_id: str,
+    _current_user: Annotated[dict, Depends(get_current_active_user)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    claim_type = await service.get_claim_type_by_id(
+        claim_type_id=claim_type_id,
+        include_details=True,
+    )
+
+    return ClaimTypeDetailResponse(**claim_type)
+
+
+@router.patch(
+    "/claim-types/{claim_type_id}",
+    response_model=ClaimTypeUpdatedResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update claim type",
+)
+async def update_claim_type(
+    claim_type_id: str,
+    request: UpdateClaimTypeRequest,
+    current_user: Annotated[dict, Depends(require_hr)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    updated_by = get_actor_id(current_user)
+
+    claim_type = await service.update_claim_type(
+        claim_type_id=claim_type_id,
+        update_data=request.model_dump(exclude_none=True),
+        updated_by=updated_by,
+    )
+
+    return ClaimTypeUpdatedResponse(
+        message="Claim type updated successfully",
+        claim_type=ClaimTypeListResponse(**claim_type),
+    )
+
+
+@router.delete(
+    "/claim-types/{claim_type_id}",
+    response_model=ClaimTypeDeactivatedResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Deactivate claim type",
+)
+async def deactivate_claim_type(
+    claim_type_id: str,
+    current_user: Annotated[dict, Depends(require_hr)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    updated_by = get_actor_id(current_user)
+
+    await service.deactivate_claim_type(
+        claim_type_id=claim_type_id,
+        updated_by=updated_by,
+    )
+
+    return ClaimTypeDeactivatedResponse(
+        message="Claim type deactivated successfully",
+        claim_type_id=claim_type_id,
+    )
+
+
+@router.patch(
+    "/claim-types/{claim_type_id}/activate",
+    response_model=ClaimTypeUpdatedResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Reactivate claim type",
+)
+async def activate_claim_type(
+    claim_type_id: str,
+    current_user: Annotated[dict, Depends(require_hr)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    updated_by = get_actor_id(current_user)
+
+    claim_type = await service.activate_claim_type(
+        claim_type_id=claim_type_id,
+        updated_by=updated_by,
+    )
+
+    return ClaimTypeUpdatedResponse(
+        message="Claim type activated successfully",
+        claim_type=ClaimTypeListResponse(**claim_type),
+    )
+
+
+# -------------------------
+# Holiday Routes
+# -------------------------
+
+
+@router.post(
+    "/holidays",
+    response_model=HolidayCreatedResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create new holiday",
+)
+async def create_holiday(
+    request: CreateHolidayRequest,
+    current_user: Annotated[dict, Depends(require_hr)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    created_by = get_actor_id(current_user)
+
+    holiday = await service.create_holiday(
+        holiday_data=request.model_dump(exclude_none=True),
+        created_by=created_by,
+    )
+
+    return HolidayCreatedResponse(
+        message="Holiday created successfully",
+        holiday_id=holiday.get("id") or holiday.get("_id"),
+        holiday=HolidayListResponse(**holiday),
+    )
+
+
+@router.get(
+    "/holidays",
+    response_model=dict,
+    status_code=status.HTTP_200_OK,
+    summary="List holidays",
+)
+async def list_holidays(
+    _current_user: Annotated[dict, Depends(get_current_active_user)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+    year: Optional[int] = Query(None, ge=2020, le=2100),
+    month: Optional[int] = Query(None, ge=1, le=12),
+    type: Optional[str] = Query(
+        None,
+        pattern="^(national|festival|company|optional|regional)$",
+    ),
+    location: Optional[str] = Query(None),
+    is_optional: Optional[bool] = Query(None),
+    is_working_day: Optional[bool] = Query(None),
+    is_half_day: Optional[bool] = Query(None),
+    is_active: Optional[bool] = Query(None),
+    from_date: Optional[date] = Query(None),
+    to_date: Optional[date] = Query(None),
+    search: Optional[str] = Query(None, min_length=2, max_length=100),
+    sort_by: str = Query(
+        "date",
+        pattern="^(date|name|type|year|location|display_order|created_at|updated_at)$",
+    ),
+    sort_order: str = Query("asc", pattern="^(asc|desc)$"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+):
+    holidays, total_count = await service.list_holidays(
+        year=year,
+        month=month,
+        holiday_type=type,
+        location=location,
+        is_optional=is_optional,
+        is_working_day=is_working_day,
+        is_half_day=is_half_day,
+        is_active=is_active,
+        from_date=from_date,
+        to_date=to_date,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        skip=skip,
+        limit=limit,
+    )
+
+    return {
+        "holidays": [
+            HolidayListResponse(**holiday)
+            for holiday in holidays
+        ],
+        "total": total_count,
+        "skip": skip,
+        "limit": limit,
+    }
+
+
+@router.get(
+    "/holidays/calendar",
+    response_model=list[HolidayCalendarResponse],
+    status_code=status.HTTP_200_OK,
+    summary="List holidays for calendar",
+)
+async def list_holidays_calendar(
+    _current_user: Annotated[dict, Depends(get_current_active_user)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+    year: int = Query(..., ge=2020, le=2100),
+    month: Optional[int] = Query(None, ge=1, le=12),
+    location: Optional[str] = Query(None),
+    include_optional: bool = Query(True),
+):
+    holidays = await service.list_holidays_for_calendar(
+        year=year,
+        month=month,
+        location=location,
+        include_optional=include_optional,
+    )
+
+    return [
+        HolidayCalendarResponse(**holiday)
+        for holiday in holidays
+    ]
+
+
+@router.get(
+    "/holidays/dropdown",
+    response_model=list[HolidayDropdownResponse],
+    status_code=status.HTTP_200_OK,
+    summary="List holidays for dropdown",
+)
+async def list_holidays_dropdown(
+    _current_user: Annotated[dict, Depends(get_current_active_user)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+    year: Optional[int] = Query(None, ge=2020, le=2100),
+    location: Optional[str] = Query(None),
+    include_optional: bool = Query(True),
+):
+    holidays, _total_count = await service.list_holidays(
+        year=year,
+        location=location,
+        is_optional=None if include_optional else False,
+        is_active=True,
+        sort_by="date",
+        sort_order="asc",
+        skip=0,
+        limit=500,
+    )
+
+    return [
+        HolidayDropdownResponse(**holiday)
+        for holiday in holidays
+    ]
+
+
+@router.get(
+    "/holidays/upcoming",
+    response_model=list[HolidayCalendarResponse],
+    status_code=status.HTTP_200_OK,
+    summary="List upcoming holidays",
+)
+async def list_upcoming_holidays(
+    _current_user: Annotated[dict, Depends(get_current_active_user)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+    days: int = Query(30, ge=1, le=365),
+    location: Optional[str] = Query(None),
+    include_optional: bool = Query(True),
+):
+    holidays = await service.list_upcoming_holidays(
+        days=days,
+        location=location,
+        include_optional=include_optional,
+    )
+
+    return [
+        HolidayCalendarResponse(**holiday)
+        for holiday in holidays
+    ]
+
+
+@router.get(
+    "/holidays/statistics",
+    response_model=HolidayStatisticsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get holiday statistics",
+)
+async def get_holiday_statistics(
+    _current_user: Annotated[dict, Depends(require_hr)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+    year: Optional[int] = Query(None, ge=2020, le=2100),
+):
+    statistics = await service.get_holiday_statistics(year=year)
+    return HolidayStatisticsResponse(**statistics)
+
+
+@router.post(
+    "/holidays/bulk-import",
+    response_model=BulkHolidayImportResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Bulk import holidays",
+)
+async def bulk_import_holidays(
+    request: BulkHolidayImportRequest,
+    current_user: Annotated[dict, Depends(require_admin)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    created_by = get_actor_id(current_user)
+
+    holidays_data = [
+        holiday.model_dump(exclude_none=True)
+        for holiday in request.holidays
+    ]
+
+    result = await service.bulk_import_holidays(
+        holidays=holidays_data,
+        created_by=created_by,
+        skip_duplicates=request.skip_duplicates,
+    )
+
+    return BulkHolidayImportResponse(**result)
+
+
+@router.get(
+    "/holidays/{holiday_id}",
+    response_model=HolidayDetailResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get holiday by ID",
+)
+async def get_holiday(
+    holiday_id: str,
+    _current_user: Annotated[dict, Depends(get_current_active_user)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    holiday = await service.get_holiday_by_id(holiday_id=holiday_id)
+
+    return HolidayDetailResponse(**holiday)
+
+
+@router.patch(
+    "/holidays/{holiday_id}",
+    response_model=HolidayUpdatedResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update holiday",
+)
+async def update_holiday(
+    holiday_id: str,
+    request: UpdateHolidayRequest,
+    current_user: Annotated[dict, Depends(require_hr)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    updated_by = get_actor_id(current_user)
+
+    holiday = await service.update_holiday(
+        holiday_id=holiday_id,
+        update_data=request.model_dump(exclude_none=True),
+        updated_by=updated_by,
+    )
+
+    return HolidayUpdatedResponse(
+        message="Holiday updated successfully",
+        holiday=HolidayListResponse(**holiday),
+    )
+
+
+@router.delete(
+    "/holidays/{holiday_id}",
+    response_model=HolidayDeactivatedResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Deactivate holiday",
+)
+async def deactivate_holiday(
+    holiday_id: str,
+    current_user: Annotated[dict, Depends(require_hr)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    updated_by = get_actor_id(current_user)
+
+    await service.deactivate_holiday(
+        holiday_id=holiday_id,
+        updated_by=updated_by,
+    )
+
+    return HolidayDeactivatedResponse(
+        message="Holiday deactivated successfully",
+        holiday_id=holiday_id,
+    )
+
+
+@router.patch(
+    "/holidays/{holiday_id}/activate",
+    response_model=HolidayUpdatedResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Reactivate holiday",
+)
+async def activate_holiday(
+    holiday_id: str,
+    current_user: Annotated[dict, Depends(require_hr)],
+    service: Annotated[MasterDataService, Depends(get_master_data_service)],
+):
+    updated_by = get_actor_id(current_user)
+
+    holiday = await service.activate_holiday(
+        holiday_id=holiday_id,
+        updated_by=updated_by,
+    )
+
+    return HolidayUpdatedResponse(
+        message="Holiday activated successfully",
+        holiday=HolidayListResponse(**holiday),
+    )

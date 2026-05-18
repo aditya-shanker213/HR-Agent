@@ -53,14 +53,23 @@ async def lifespan(app: FastAPI):
         await RedisDB.connect()
 
         db = MongoDB.get_database()
-        await create_indexes(db)
+        index_results = await create_indexes(db)
 
         print("=" * 60)
         print("All services started successfully")
         print("=" * 60)
         print(f"Environment: {settings.ENVIRONMENT}")
         print(f"Debug mode: {settings.DEBUG}")
+        print(f"API prefix: {settings.API_PREFIX}")
         print(f"API documentation: http://localhost:{settings.PORT}/docs")
+        print("Index summary:")
+        for collection_name, result in index_results.items():
+            total = result.get("total", 0) if isinstance(result, dict) else 0
+            errors = result.get("errors", []) if isinstance(result, dict) else []
+            print(
+                f"  - {collection_name}: {total} indexes checked/created, "
+                f"errors: {len(errors)}"
+            )
         print("=" * 60)
 
     except Exception as exc:
@@ -97,17 +106,25 @@ app = FastAPI(
         "- Forgot password with OTP\n"
         "- JWT access and refresh tokens\n"
         "- Role-based access control\n"
-        "- Department master data management\n\n"
+        "- Department master data management\n"
+        "- Designation master data management\n"
+        "- Leave type master data management\n"
+        "- Claim type master data management\n"
+        "- Holiday calendar master data management\n\n"
+        "Master data capabilities:\n"
+        "- Create, list, update, deactivate, and reactivate master records\n"
+        "- Dropdown APIs for frontend forms\n"
+        "- Bulk import APIs for Admin users\n"
+        "- Statistics APIs for HR/Admin dashboards\n"
+        "- Holiday calendar APIs for leave and payroll calculations\n\n"
         "Planned modules:\n"
-        "- Designations\n"
-        "- Leave types\n"
-        "- Claim types\n"
         "- Employee profiles\n"
         "- Leave management\n"
         "- Claim/reimbursement workflows\n"
         "- Payroll queries\n"
         "- RAG-based HR policy Q&A\n"
         "- LangGraph AI agent workflows\n"
+        "- Voice-based HR assistant\n"
     ),
     lifespan=lifespan,
     docs_url="/docs" if not settings.is_production() else None,
@@ -171,9 +188,23 @@ async def root():
         "environment": settings.ENVIRONMENT,
         "api_prefix": settings.API_PREFIX,
         "docs": "/docs" if not settings.is_production() else "disabled in production",
+        "redoc": "/redoc" if not settings.is_production() else "disabled in production",
         "modules": [
             "authentication",
             "master_data_departments",
+            "master_data_designations",
+            "master_data_leave_types",
+            "master_data_claim_types",
+            "master_data_holidays",
+        ],
+        "planned_modules": [
+            "employee_profiles",
+            "leave_management",
+            "claim_management",
+            "payroll_queries",
+            "policy_rag",
+            "langgraph_ai_agent",
+            "voice_assistant",
         ],
     }
 
@@ -198,6 +229,8 @@ async def health_check():
         "service": "healthy",
         "mongodb": "unknown",
         "redis": "unknown",
+        "environment": settings.ENVIRONMENT,
+        "version": settings.APP_VERSION,
     }
 
     all_healthy = True
@@ -248,7 +281,11 @@ async def readiness_check():
         redis_client = RedisDB.get_client()
         await redis_client.ping()
 
-        return {"status": "ready"}
+        return {
+            "status": "ready",
+            "service": settings.APP_NAME,
+            "environment": settings.ENVIRONMENT,
+        }
 
     except Exception as exc:
         return JSONResponse(
@@ -273,7 +310,11 @@ async def liveness_check():
     If this endpoint responds, the service process is alive.
     """
 
-    return {"status": "alive"}
+    return {
+        "status": "alive",
+        "service": settings.APP_NAME,
+        "version": settings.APP_VERSION,
+    }
 
 
 # -------------------------
@@ -295,6 +336,7 @@ async def validation_exception_handler(
             "detail": exc.errors(),
             "error_code": "VALIDATION_ERROR",
             "path": request.url.path,
+            "method": request.method,
         },
     )
 
@@ -333,6 +375,7 @@ async def global_exception_handler(
             content={
                 "detail": "Internal server error. Please contact support.",
                 "error_code": "INTERNAL_ERROR",
+                "path": request.url.path,
             },
         )
 
@@ -341,6 +384,8 @@ async def global_exception_handler(
         content={
             "detail": error_detail,
             "error_code": "INTERNAL_ERROR",
+            "path": request.url.path,
+            "method": request.method,
             "traceback": error_traceback.split("\n"),
         },
     )

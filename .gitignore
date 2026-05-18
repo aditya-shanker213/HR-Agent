@@ -26,3 +26,7 @@ storage/
 
 .DS_Store
 Thumbs.db
+
+# Graphify generated files
+graphify-out/
+.graphify_*

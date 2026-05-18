@@ -4,12 +4,12 @@ Master Data Service - Business logic for master data management.
 Current scope:
 - Departments
 - Designations
-
-Future scope:
 - Leave Types
 - Claim Types
+- Holidays
+
+Future scope:
 - Company Settings
-- Holiday Calendar
 
 Pattern:
 Route → Service → Repository → MongoDB
@@ -32,8 +32,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import HTTPException, status
 from pymongo.errors import DuplicateKeyError
 
+from backend.app.models.claim_type_model import ClaimType
+from backend.app.models.holiday_model import Holiday
+from backend.app.models.leave_type_model import LeaveType
+from backend.app.repositories.claim_type_repository import ClaimTypeRepository
 from backend.app.repositories.department_repository import DepartmentRepository
 from backend.app.repositories.designation_repository import DesignationRepository
+from backend.app.repositories.holiday_repository import HolidayRepository
+from backend.app.repositories.leave_type_repository import LeaveTypeRepository
 from backend.app.repositories.user_repository import UserRepository
 
 
@@ -44,10 +50,11 @@ class MasterDataService:
     This service currently handles:
     - Department master data
     - Designation master data
+    - Leave type master data
+    - Claim type master data
+    - Holiday master data
 
     Later:
-    - LeaveTypeRepository can be added here
-    - ClaimTypeRepository can be added here
     - EmployeeRepository should replace UserRepository for department head validation
     """
 
@@ -56,10 +63,16 @@ class MasterDataService:
         department_repo: DepartmentRepository,
         user_repo: UserRepository,
         designation_repo: Optional[DesignationRepository] = None,
+        leave_type_repo: Optional[LeaveTypeRepository] = None,
+        claim_type_repo: Optional[ClaimTypeRepository] = None,
+        holiday_repo: Optional[HolidayRepository] = None,
     ):
         self.department_repo = department_repo
         self.user_repo = user_repo
         self.designation_repo = designation_repo
+        self.leave_type_repo = leave_type_repo
+        self.claim_type_repo = claim_type_repo
+        self.holiday_repo = holiday_repo
 
     # -------------------------
     # Internal helper methods
@@ -85,6 +98,89 @@ class MasterDataService:
             )
 
         return self.designation_repo
+
+    def _require_leave_type_repo(self) -> LeaveTypeRepository:
+        """
+        Ensure leave type repository is available before using leave type methods.
+        """
+        if self.leave_type_repo is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Leave type repository is not configured",
+            )
+
+        return self.leave_type_repo
+
+    def _require_claim_type_repo(self) -> ClaimTypeRepository:
+        """
+        Ensure claim type repository is available before using claim type methods.
+        """
+        if self.claim_type_repo is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Claim type repository is not configured",
+            )
+
+        return self.claim_type_repo
+
+
+    def _require_holiday_repo(self) -> HolidayRepository:
+        """
+        Ensure holiday repository is available before using holiday methods.
+        """
+        if self.holiday_repo is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Holiday repository is not configured",
+            )
+
+        return self.holiday_repo
+
+    def _validate_leave_type_payload(self, data: Dict[str, Any]) -> None:
+        """
+        Validate complete leave type business rules using LeaveType model.
+
+        For update operations, service first merges existing data with update data,
+        then validates the merged payload so partial updates cannot create invalid rules.
+        """
+        try:
+            LeaveType(**data)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            )
+
+    def _validate_claim_type_payload(self, data: Dict[str, Any]) -> None:
+        """
+        Validate complete claim type business rules using ClaimType model.
+
+        For update operations, service first merges existing data with update data,
+        then validates the merged payload so partial updates cannot create invalid rules.
+        """
+        try:
+            ClaimType(**data)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            )
+
+
+    def _validate_holiday_payload(self, data: Dict[str, Any]) -> None:
+        """
+        Validate complete holiday business rules using Holiday model.
+
+        For update operations, service first merges existing data with update data,
+        then validates the merged payload so partial updates cannot create invalid rules.
+        """
+        try:
+            Holiday(**data)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            )
 
     async def _validate_head_user(self, head_id: Optional[str]) -> None:
         """
@@ -672,12 +768,6 @@ class MasterDataService:
     ) -> Dict[str, Any]:
         """
         Create a new designation.
-
-        Business rules:
-        - Designation code must be unique.
-        - department_id is optional.
-        - If department_id is provided, department must exist and be active.
-        - created_by and updated_by are set from current logged-in user.
         """
         designation_repo = self._require_designation_repo()
         designation_data = self._clean_payload(designation_data)
@@ -789,7 +879,6 @@ class MasterDataService:
     async def list_designations_for_dropdown(
         self,
         department_id: Optional[str] = None,
-        include_global: bool = True,
     ) -> List[Dict[str, Any]]:
         """
         List active designations for frontend dropdowns.
@@ -798,7 +887,6 @@ class MasterDataService:
 
         return await designation_repo.list_active_for_dropdown(
             department_id=department_id,
-            include_global=include_global,
         )
 
     async def update_designation(
@@ -887,7 +975,7 @@ class MasterDataService:
         updated_by: str,
     ) -> bool:
         """
-        Deactivate a designation using soft delete.
+        Deactivate designation using soft delete.
         """
         designation_repo = self._require_designation_repo()
 
@@ -948,7 +1036,15 @@ class MasterDataService:
 
         department_id = designation.get("department_id")
         if department_id:
-            await self._validate_designation_department(department_id)
+            department_active = await self.department_repo.active_exists_by_id(
+                department_id
+            )
+
+            if not department_active:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Cannot activate designation because linked department is inactive",
+                )
 
         activated = await designation_repo.activate(
             designation_id=designation_id,
@@ -1087,3 +1183,1525 @@ class MasterDataService:
         """
         designation_repo = self._require_designation_repo()
         return await designation_repo.get_statistics()
+
+    # -------------------------
+    # Leave Type Operations
+    # -------------------------
+
+    async def create_leave_type(
+        self,
+        leave_type_data: Dict[str, Any],
+        created_by: str,
+    ) -> Dict[str, Any]:
+        """
+        Create a new leave type.
+        """
+        leave_type_repo = self._require_leave_type_repo()
+        leave_type_data = self._clean_payload(leave_type_data)
+
+        code = leave_type_data.get("code")
+        if not code:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Leave type code is required",
+            )
+
+        if await leave_type_repo.code_exists(code):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Leave type code '{code}' already exists",
+            )
+
+        leave_type_data["created_by"] = created_by
+        leave_type_data["updated_by"] = created_by
+
+        self._validate_leave_type_payload(leave_type_data)
+
+        try:
+            leave_type_id = await leave_type_repo.create(leave_type_data)
+
+        except DuplicateKeyError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Leave type code '{code}' already exists",
+            )
+
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create leave type",
+            )
+
+        leave_type = await leave_type_repo.find_by_id(leave_type_id)
+
+        if not leave_type:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Leave type created but failed to retrieve",
+            )
+
+        return leave_type
+
+    async def get_leave_type_by_id(
+        self,
+        leave_type_id: str,
+        include_details: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Get leave type by ID.
+        """
+        leave_type_repo = self._require_leave_type_repo()
+
+        leave_type = await leave_type_repo.find_by_id(leave_type_id)
+
+        if not leave_type:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Leave type with ID '{leave_type_id}' not found",
+            )
+
+        if include_details:
+            leave_type = dict(leave_type)
+            # TODO: Replace these values with real aggregation after leave module.
+            leave_type.setdefault("total_employees_granted", 0)
+            leave_type.setdefault("total_applications_this_year", 0)
+
+        return leave_type
+
+    async def list_leave_types(
+        self,
+        is_active: Optional[bool] = None,
+        is_paid: Optional[bool] = None,
+        requires_approval: Optional[bool] = None,
+        requires_documentation: Optional[bool] = None,
+        carry_forward_allowed: Optional[bool] = None,
+        encashment_allowed: Optional[bool] = None,
+        is_accrued: Optional[bool] = None,
+        available_during_probation: Optional[bool] = None,
+        gender_specific: Optional[str] = None,
+        search: Optional[str] = None,
+        sort_by: str = "display_order",
+        sort_order: str = "asc",
+        skip: int = 0,
+        limit: int = 50,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        List leave types with filtering, search, sorting, and pagination.
+        """
+        leave_type_repo = self._require_leave_type_repo()
+
+        leave_types = await leave_type_repo.list_all(
+            is_active=is_active,
+            is_paid=is_paid,
+            requires_approval=requires_approval,
+            requires_documentation=requires_documentation,
+            carry_forward_allowed=carry_forward_allowed,
+            encashment_allowed=encashment_allowed,
+            is_accrued=is_accrued,
+            available_during_probation=available_during_probation,
+            gender_specific=gender_specific,
+            search=search,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            skip=skip,
+            limit=limit,
+        )
+
+        total_count = await leave_type_repo.count(
+            is_active=is_active,
+            is_paid=is_paid,
+            requires_approval=requires_approval,
+            requires_documentation=requires_documentation,
+            carry_forward_allowed=carry_forward_allowed,
+            encashment_allowed=encashment_allowed,
+            is_accrued=is_accrued,
+            available_during_probation=available_during_probation,
+            gender_specific=gender_specific,
+            search=search,
+        )
+
+        return leave_types, total_count
+
+    async def list_leave_types_for_dropdown(
+        self,
+        gender: Optional[str] = None,
+        include_unpaid: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """
+        List active leave types for frontend dropdowns.
+        """
+        leave_type_repo = self._require_leave_type_repo()
+
+        return await leave_type_repo.list_active_for_dropdown(
+            gender=gender,
+            include_unpaid=include_unpaid,
+        )
+
+    async def update_leave_type(
+        self,
+        leave_type_id: str,
+        update_data: Dict[str, Any],
+        updated_by: str,
+    ) -> Dict[str, Any]:
+        """
+        Update leave type fields.
+
+        Partial update safety:
+        - Fetch existing document
+        - Merge existing + update data
+        - Validate complete merged payload using LeaveType model
+        - Save only requested update fields
+        """
+        leave_type_repo = self._require_leave_type_repo()
+        update_data = self._clean_payload(update_data)
+
+        if not update_data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No valid fields provided for update",
+            )
+
+        existing_leave_type = await leave_type_repo.find_by_id(leave_type_id)
+
+        if not existing_leave_type:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Leave type with ID '{leave_type_id}' not found",
+            )
+
+        new_code = update_data.get("code")
+        existing_code = existing_leave_type.get("code")
+
+        if new_code and new_code != existing_code:
+            if await leave_type_repo.code_exists(
+                code=new_code,
+                exclude_id=leave_type_id,
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Leave type code '{new_code}' already exists",
+                )
+
+        update_data["updated_by"] = updated_by
+
+        validation_payload = {
+            key: value
+            for key, value in existing_leave_type.items()
+            if key not in {"_id", "id", "created_at", "updated_at"}
+        }
+        validation_payload.update(update_data)
+
+        self._validate_leave_type_payload(validation_payload)
+
+        try:
+            updated = await leave_type_repo.update(
+                leave_type_id=leave_type_id,
+                update_data=update_data,
+            )
+
+        except DuplicateKeyError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Leave type code '{new_code}' already exists",
+            )
+
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update leave type",
+            )
+
+        if not updated:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update leave type",
+            )
+
+        leave_type = await leave_type_repo.find_by_id(leave_type_id)
+
+        if not leave_type:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Leave type updated but failed to retrieve",
+            )
+
+        return leave_type
+
+    async def deactivate_leave_type(
+        self,
+        leave_type_id: str,
+        updated_by: str,
+    ) -> bool:
+        """
+        Deactivate a leave type using soft delete.
+        """
+        leave_type_repo = self._require_leave_type_repo()
+
+        leave_type = await leave_type_repo.find_by_id(leave_type_id)
+
+        if not leave_type:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Leave type with ID '{leave_type_id}' not found",
+            )
+
+        if not leave_type.get("is_active", False):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Leave type is already inactive",
+            )
+
+        # TODO:
+        # After employee/leave module is created:
+        # Do not allow deactivation if active balances or pending leaves use this leave type.
+
+        deactivated = await leave_type_repo.deactivate(
+            leave_type_id=leave_type_id,
+            updated_by=updated_by,
+        )
+
+        if not deactivated:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to deactivate leave type",
+            )
+
+        return True
+
+    async def activate_leave_type(
+        self,
+        leave_type_id: str,
+        updated_by: str,
+    ) -> Dict[str, Any]:
+        """
+        Reactivate an inactive leave type.
+        """
+        leave_type_repo = self._require_leave_type_repo()
+
+        leave_type = await leave_type_repo.find_by_id(leave_type_id)
+
+        if not leave_type:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Leave type with ID '{leave_type_id}' not found",
+            )
+
+        if leave_type.get("is_active", False):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Leave type is already active",
+            )
+
+        validation_payload = {
+            key: value
+            for key, value in leave_type.items()
+            if key not in {"_id", "id", "created_at", "updated_at"}
+        }
+        validation_payload["is_active"] = True
+        validation_payload["updated_by"] = updated_by
+
+        self._validate_leave_type_payload(validation_payload)
+
+        activated = await leave_type_repo.activate(
+            leave_type_id=leave_type_id,
+            updated_by=updated_by,
+        )
+
+        if not activated:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to activate leave type",
+            )
+
+        activated_leave_type = await leave_type_repo.find_by_id(leave_type_id)
+
+        if not activated_leave_type:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Leave type activated but failed to retrieve",
+            )
+
+        return activated_leave_type
+
+    async def bulk_import_leave_types(
+        self,
+        leave_types: List[Dict[str, Any]],
+        created_by: str,
+        skip_duplicates: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Bulk import leave types.
+        """
+        leave_type_repo = self._require_leave_type_repo()
+
+        if not leave_types:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Leave types list cannot be empty",
+            )
+
+        prepared_leave_types: List[Dict[str, Any]] = []
+        skipped: List[Dict[str, Any]] = []
+        failed: List[Dict[str, Any]] = []
+        seen_codes: set[str] = set()
+
+        for index, raw_leave_type in enumerate(leave_types):
+            try:
+                leave_type_data = self._clean_payload(dict(raw_leave_type))
+
+                code = leave_type_data.get("code")
+                if not code:
+                    failed.append(
+                        {
+                            "index": index,
+                            "code": None,
+                            "error": "Leave type code is required",
+                        }
+                    )
+                    continue
+
+                normalized_code = code.strip().upper()
+
+                if normalized_code in seen_codes:
+                    duplicate_error = {
+                        "index": index,
+                        "code": normalized_code,
+                        "error": "Duplicate leave type code inside import payload",
+                    }
+
+                    if skip_duplicates:
+                        skipped.append(duplicate_error)
+                        continue
+
+                    failed.append(duplicate_error)
+                    continue
+
+                if await leave_type_repo.code_exists(normalized_code):
+                    duplicate_error = {
+                        "index": index,
+                        "code": normalized_code,
+                        "error": "Leave type code already exists",
+                    }
+
+                    if skip_duplicates:
+                        skipped.append(duplicate_error)
+                        continue
+
+                    failed.append(duplicate_error)
+                    continue
+
+                leave_type_data["created_by"] = created_by
+                leave_type_data["updated_by"] = created_by
+
+                self._validate_leave_type_payload(leave_type_data)
+
+                prepared_leave_types.append(leave_type_data)
+                seen_codes.add(normalized_code)
+
+            except HTTPException as exc:
+                failed.append(
+                    {
+                        "index": index,
+                        "code": raw_leave_type.get("code"),
+                        "error": exc.detail,
+                    }
+                )
+
+            except Exception as exc:
+                failed.append(
+                    {
+                        "index": index,
+                        "code": raw_leave_type.get("code"),
+                        "error": str(exc),
+                    }
+                )
+
+        created_ids, insert_errors = await leave_type_repo.create_many(
+            prepared_leave_types
+        )
+
+        failed.extend(insert_errors)
+
+        return {
+            "message": "Bulk leave type import completed",
+            "created_count": len(created_ids),
+            "skipped_count": len(skipped),
+            "failed_count": len(failed),
+            "created_ids": created_ids,
+            "errors": skipped + failed,
+        }
+
+    async def get_leave_type_statistics(self) -> Dict[str, Any]:
+        """
+        Get leave type statistics.
+        """
+        leave_type_repo = self._require_leave_type_repo()
+        return await leave_type_repo.get_statistics()
+
+    async def get_leave_type_rules_by_id(
+        self,
+        leave_type_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Get active leave type rules by ID.
+
+        This will be used later by leave application validation.
+        """
+        leave_type_repo = self._require_leave_type_repo()
+
+        rules = await leave_type_repo.get_leave_rules_by_id(leave_type_id)
+
+        if not rules:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Active leave type rules for ID '{leave_type_id}' not found",
+            )
+
+        return rules
+
+    # -------------------------
+    # Claim Type Operations
+    # -------------------------
+
+    async def create_claim_type(
+        self,
+        claim_type_data: Dict[str, Any],
+        created_by: str,
+    ) -> Dict[str, Any]:
+        """
+        Create a new claim type.
+        """
+        claim_type_repo = self._require_claim_type_repo()
+        claim_type_data = self._clean_payload(claim_type_data)
+
+        code = claim_type_data.get("code")
+        if not code:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Claim type code is required",
+            )
+
+        if await claim_type_repo.code_exists(code):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Claim type code '{code}' already exists",
+            )
+
+        claim_type_data["created_by"] = created_by
+        claim_type_data["updated_by"] = created_by
+
+        self._validate_claim_type_payload(claim_type_data)
+
+        try:
+            claim_type_id = await claim_type_repo.create(claim_type_data)
+
+        except DuplicateKeyError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Claim type code '{code}' already exists",
+            )
+
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create claim type",
+            )
+
+        claim_type = await claim_type_repo.find_by_id(claim_type_id)
+
+        if not claim_type:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Claim type created but failed to retrieve",
+            )
+
+        return claim_type
+
+    async def get_claim_type_by_id(
+        self,
+        claim_type_id: str,
+        include_details: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Get claim type by ID.
+        """
+        claim_type_repo = self._require_claim_type_repo()
+
+        claim_type = await claim_type_repo.find_by_id(claim_type_id)
+
+        if not claim_type:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Claim type with ID '{claim_type_id}' not found",
+            )
+
+        if include_details:
+            claim_type = dict(claim_type)
+            # TODO: Replace these values with real aggregation after claim module.
+            claim_type.setdefault("total_employees_using", 0)
+            claim_type.setdefault("total_claims_this_year", 0)
+            claim_type.setdefault("total_amount_claimed", 0)
+            claim_type.setdefault("total_amount_approved", 0)
+            claim_type.setdefault("average_claim_amount", 0.0)
+
+        return claim_type
+
+    async def list_claim_types(
+        self,
+        is_active: Optional[bool] = None,
+        requires_bill: Optional[bool] = None,
+        requires_approval: Optional[bool] = None,
+        is_taxable: Optional[bool] = None,
+        currency: Optional[str] = None,
+        search: Optional[str] = None,
+        sort_by: str = "display_order",
+        sort_order: str = "asc",
+        skip: int = 0,
+        limit: int = 50,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        List claim types with filtering, search, sorting, and pagination.
+        """
+        claim_type_repo = self._require_claim_type_repo()
+
+        claim_types = await claim_type_repo.list_all(
+            is_active=is_active,
+            requires_bill=requires_bill,
+            requires_approval=requires_approval,
+            is_taxable=is_taxable,
+            currency=currency,
+            search=search,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            skip=skip,
+            limit=limit,
+        )
+
+        total_count = await claim_type_repo.count(
+            is_active=is_active,
+            requires_bill=requires_bill,
+            requires_approval=requires_approval,
+            is_taxable=is_taxable,
+            currency=currency,
+            search=search,
+        )
+
+        return claim_types, total_count
+
+    async def list_claim_types_for_dropdown(
+        self,
+        include_taxable: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """
+        List active claim types for frontend dropdowns.
+        """
+        claim_type_repo = self._require_claim_type_repo()
+
+        return await claim_type_repo.list_active_for_dropdown(
+            include_taxable=include_taxable,
+        )
+
+    async def update_claim_type(
+        self,
+        claim_type_id: str,
+        update_data: Dict[str, Any],
+        updated_by: str,
+    ) -> Dict[str, Any]:
+        """
+        Update claim type fields.
+
+        Partial update safety:
+        - Fetch existing document
+        - Merge existing + update data
+        - Validate complete merged payload using ClaimType model
+        - Save only requested update fields
+        """
+        claim_type_repo = self._require_claim_type_repo()
+        update_data = self._clean_payload(update_data)
+
+        if not update_data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No valid fields provided for update",
+            )
+
+        existing_claim_type = await claim_type_repo.find_by_id(claim_type_id)
+
+        if not existing_claim_type:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Claim type with ID '{claim_type_id}' not found",
+            )
+
+        new_code = update_data.get("code")
+        existing_code = existing_claim_type.get("code")
+
+        if new_code and new_code != existing_code:
+            if await claim_type_repo.code_exists(
+                code=new_code,
+                exclude_id=claim_type_id,
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Claim type code '{new_code}' already exists",
+                )
+
+        update_data["updated_by"] = updated_by
+
+        validation_payload = {
+            key: value
+            for key, value in existing_claim_type.items()
+            if key not in {"_id", "id", "created_at", "updated_at"}
+        }
+        validation_payload.update(update_data)
+
+        self._validate_claim_type_payload(validation_payload)
+
+        try:
+            updated = await claim_type_repo.update(
+                claim_type_id=claim_type_id,
+                update_data=update_data,
+            )
+
+        except DuplicateKeyError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Claim type code '{new_code}' already exists",
+            )
+
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update claim type",
+            )
+
+        if not updated:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update claim type",
+            )
+
+        claim_type = await claim_type_repo.find_by_id(claim_type_id)
+
+        if not claim_type:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Claim type updated but failed to retrieve",
+            )
+
+        return claim_type
+
+    async def deactivate_claim_type(
+        self,
+        claim_type_id: str,
+        updated_by: str,
+    ) -> bool:
+        """
+        Deactivate a claim type using soft delete.
+        """
+        claim_type_repo = self._require_claim_type_repo()
+
+        claim_type = await claim_type_repo.find_by_id(claim_type_id)
+
+        if not claim_type:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Claim type with ID '{claim_type_id}' not found",
+            )
+
+        if not claim_type.get("is_active", False):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Claim type is already inactive",
+            )
+
+        # TODO:
+        # After claim module is created:
+        # Do not allow deactivation if pending/active claims use this claim type.
+
+        deactivated = await claim_type_repo.deactivate(
+            claim_type_id=claim_type_id,
+            updated_by=updated_by,
+        )
+
+        if not deactivated:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to deactivate claim type",
+            )
+
+        return True
+
+    async def activate_claim_type(
+        self,
+        claim_type_id: str,
+        updated_by: str,
+    ) -> Dict[str, Any]:
+        """
+        Reactivate an inactive claim type.
+        """
+        claim_type_repo = self._require_claim_type_repo()
+
+        claim_type = await claim_type_repo.find_by_id(claim_type_id)
+
+        if not claim_type:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Claim type with ID '{claim_type_id}' not found",
+            )
+
+        if claim_type.get("is_active", False):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Claim type is already active",
+            )
+
+        validation_payload = {
+            key: value
+            for key, value in claim_type.items()
+            if key not in {"_id", "id", "created_at", "updated_at"}
+        }
+        validation_payload["is_active"] = True
+        validation_payload["updated_by"] = updated_by
+
+        self._validate_claim_type_payload(validation_payload)
+
+        activated = await claim_type_repo.activate(
+            claim_type_id=claim_type_id,
+            updated_by=updated_by,
+        )
+
+        if not activated:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to activate claim type",
+            )
+
+        activated_claim_type = await claim_type_repo.find_by_id(claim_type_id)
+
+        if not activated_claim_type:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Claim type activated but failed to retrieve",
+            )
+
+        return activated_claim_type
+
+    async def bulk_import_claim_types(
+        self,
+        claim_types: List[Dict[str, Any]],
+        created_by: str,
+        skip_duplicates: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Bulk import claim types.
+        """
+        claim_type_repo = self._require_claim_type_repo()
+
+        if not claim_types:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Claim types list cannot be empty",
+            )
+
+        prepared_claim_types: List[Dict[str, Any]] = []
+        skipped: List[Dict[str, Any]] = []
+        failed: List[Dict[str, Any]] = []
+        seen_codes: set[str] = set()
+
+        for index, raw_claim_type in enumerate(claim_types):
+            try:
+                claim_type_data = self._clean_payload(dict(raw_claim_type))
+
+                code = claim_type_data.get("code")
+                if not code:
+                    failed.append(
+                        {
+                            "index": index,
+                            "code": None,
+                            "error": "Claim type code is required",
+                        }
+                    )
+                    continue
+
+                normalized_code = code.strip().upper()
+
+                if normalized_code in seen_codes:
+                    duplicate_error = {
+                        "index": index,
+                        "code": normalized_code,
+                        "error": "Duplicate claim type code inside import payload",
+                    }
+
+                    if skip_duplicates:
+                        skipped.append(duplicate_error)
+                        continue
+
+                    failed.append(duplicate_error)
+                    continue
+
+                if await claim_type_repo.code_exists(normalized_code):
+                    duplicate_error = {
+                        "index": index,
+                        "code": normalized_code,
+                        "error": "Claim type code already exists",
+                    }
+
+                    if skip_duplicates:
+                        skipped.append(duplicate_error)
+                        continue
+
+                    failed.append(duplicate_error)
+                    continue
+
+                claim_type_data["created_by"] = created_by
+                claim_type_data["updated_by"] = created_by
+
+                self._validate_claim_type_payload(claim_type_data)
+
+                prepared_claim_types.append(claim_type_data)
+                seen_codes.add(normalized_code)
+
+            except HTTPException as exc:
+                failed.append(
+                    {
+                        "index": index,
+                        "code": raw_claim_type.get("code"),
+                        "error": exc.detail,
+                    }
+                )
+
+            except Exception as exc:
+                failed.append(
+                    {
+                        "index": index,
+                        "code": raw_claim_type.get("code"),
+                        "error": str(exc),
+                    }
+                )
+
+        created_ids, insert_errors = await claim_type_repo.create_many(
+            prepared_claim_types
+        )
+
+        failed.extend(insert_errors)
+
+        return {
+            "message": "Bulk claim type import completed",
+            "created_count": len(created_ids),
+            "skipped_count": len(skipped),
+            "failed_count": len(failed),
+            "created_ids": created_ids,
+            "errors": skipped + failed,
+        }
+
+    async def bulk_update_claim_type_limits(
+        self,
+        updates: List[Dict[str, Any]],
+        updated_by: str,
+    ) -> Dict[str, Any]:
+        """
+        Bulk update claim type limits.
+
+        Expected item format:
+        {
+            "id": "claim_type_id",
+            "default_annual_limit": 5000,
+            "default_monthly_limit": 1000,
+            "max_claim_amount": 2000
+        }
+        """
+        claim_type_repo = self._require_claim_type_repo()
+
+        if not updates:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Updates list cannot be empty",
+            )
+
+        updated_count, errors = await claim_type_repo.bulk_update_limits(
+            updates=updates,
+            updated_by=updated_by,
+        )
+
+        return {
+            "message": "Bulk claim type limit update completed",
+            "updated_count": updated_count,
+            "failed_count": len(errors),
+            "errors": errors,
+        }
+
+    async def get_claim_type_statistics(self) -> Dict[str, Any]:
+        """
+        Get claim type statistics.
+        """
+        claim_type_repo = self._require_claim_type_repo()
+        return await claim_type_repo.get_statistics()
+
+    async def get_claim_type_rules_by_id(
+        self,
+        claim_type_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Get active claim type rules by ID.
+
+        This will be used later by claim submission validation.
+        """
+        claim_type_repo = self._require_claim_type_repo()
+
+        rules = await claim_type_repo.get_claim_rules_by_id(claim_type_id)
+
+        if not rules:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Active claim type rules for ID '{claim_type_id}' not found",
+            )
+
+        return rules
+
+    # -------------------------
+    # Holiday Operations
+    # -------------------------
+
+    async def create_holiday(
+        self,
+        holiday_data: Dict[str, Any],
+        created_by: str,
+    ) -> Dict[str, Any]:
+        """
+        Create a new holiday.
+        """
+        holiday_repo = self._require_holiday_repo()
+        holiday_data = self._clean_payload(holiday_data)
+
+        holiday_date = holiday_data.get("date")
+        holiday_name = holiday_data.get("name")
+
+        if not holiday_date:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Holiday date is required",
+            )
+
+        if not holiday_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Holiday name is required",
+            )
+
+        holiday_data["created_by"] = created_by
+        holiday_data["updated_by"] = created_by
+
+        self._validate_holiday_payload(holiday_data)
+
+        if await holiday_repo.duplicate_exists(
+            holiday_date=holiday_date,
+            name=holiday_name,
+            location=holiday_data.get("location"),
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Holiday already exists for this date, name, and location",
+            )
+
+        try:
+            holiday_id = await holiday_repo.create(holiday_data)
+
+        except DuplicateKeyError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Holiday already exists",
+            )
+
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            )
+
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create holiday",
+            )
+
+        holiday = await holiday_repo.find_by_id(holiday_id)
+
+        if not holiday:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Holiday created but failed to retrieve",
+            )
+
+        return holiday
+
+    async def get_holiday_by_id(
+        self,
+        holiday_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Get holiday by ID.
+        """
+        holiday_repo = self._require_holiday_repo()
+
+        holiday = await holiday_repo.find_by_id(holiday_id)
+
+        if not holiday:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Holiday with ID '{holiday_id}' not found",
+            )
+
+        return holiday
+
+    async def list_holidays(
+        self,
+        year: Optional[int] = None,
+        month: Optional[int] = None,
+        holiday_type: Optional[str] = None,
+        location: Optional[str] = None,
+        is_optional: Optional[bool] = None,
+        is_working_day: Optional[bool] = None,
+        is_half_day: Optional[bool] = None,
+        is_active: Optional[bool] = None,
+        from_date: Optional[Any] = None,
+        to_date: Optional[Any] = None,
+        search: Optional[str] = None,
+        sort_by: str = "date",
+        sort_order: str = "asc",
+        skip: int = 0,
+        limit: int = 50,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        List holidays with filtering, search, sorting, and pagination.
+        """
+        holiday_repo = self._require_holiday_repo()
+
+        holidays = await holiday_repo.list_all(
+            year=year,
+            month=month,
+            holiday_type=holiday_type,
+            location=location,
+            is_optional=is_optional,
+            is_working_day=is_working_day,
+            is_half_day=is_half_day,
+            is_active=is_active,
+            from_date=from_date,
+            to_date=to_date,
+            search=search,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            skip=skip,
+            limit=limit,
+        )
+
+        total_count = await holiday_repo.count(
+            year=year,
+            month=month,
+            holiday_type=holiday_type,
+            location=location,
+            is_optional=is_optional,
+            is_working_day=is_working_day,
+            is_half_day=is_half_day,
+            is_active=is_active,
+            from_date=from_date,
+            to_date=to_date,
+            search=search,
+        )
+
+        return holidays, total_count
+
+    async def list_holidays_for_calendar(
+        self,
+        year: int,
+        month: Optional[int] = None,
+        location: Optional[str] = None,
+        include_optional: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """
+        List active holidays for frontend calendar.
+        """
+        holiday_repo = self._require_holiday_repo()
+
+        return await holiday_repo.list_for_calendar(
+            year=year,
+            month=month,
+            location=location,
+            include_optional=include_optional,
+        )
+
+    async def list_upcoming_holidays(
+        self,
+        days: int = 30,
+        location: Optional[str] = None,
+        include_optional: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """
+        List upcoming holidays for employee dashboard.
+        """
+        holiday_repo = self._require_holiday_repo()
+
+        return await holiday_repo.list_upcoming_holidays(
+            days=days,
+            location=location,
+            include_optional=include_optional,
+        )
+
+    async def update_holiday(
+        self,
+        holiday_id: str,
+        update_data: Dict[str, Any],
+        updated_by: str,
+    ) -> Dict[str, Any]:
+        """
+        Update holiday fields.
+
+        Partial update safety:
+        - Fetch existing document
+        - Merge existing + update data
+        - Validate complete merged payload using Holiday model
+        - Save only requested update fields
+        """
+        holiday_repo = self._require_holiday_repo()
+        update_data = self._clean_payload(update_data)
+
+        if not update_data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No valid fields provided for update",
+            )
+
+        existing_holiday = await holiday_repo.find_by_id(holiday_id)
+
+        if not existing_holiday:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Holiday with ID '{holiday_id}' not found",
+            )
+
+        validation_payload = {
+            key: value
+            for key, value in existing_holiday.items()
+            if key not in {"_id", "id", "created_at", "updated_at"}
+        }
+        validation_payload.update(update_data)
+        validation_payload["updated_by"] = updated_by
+
+        self._validate_holiday_payload(validation_payload)
+
+        check_date = validation_payload.get("date")
+        check_name = validation_payload.get("name")
+        check_location = validation_payload.get("location")
+
+        if check_date and check_name:
+            if await holiday_repo.duplicate_exists(
+                holiday_date=check_date,
+                name=check_name,
+                location=check_location,
+                exclude_id=holiday_id,
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Holiday already exists for this date, name, and location",
+                )
+
+        update_data["updated_by"] = updated_by
+
+        try:
+            updated = await holiday_repo.update(
+                holiday_id=holiday_id,
+                update_data=update_data,
+            )
+
+        except DuplicateKeyError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Holiday already exists",
+            )
+
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            )
+
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update holiday",
+            )
+
+        if not updated:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update holiday",
+            )
+
+        holiday = await holiday_repo.find_by_id(holiday_id)
+
+        if not holiday:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Holiday updated but failed to retrieve",
+            )
+
+        return holiday
+
+    async def deactivate_holiday(
+        self,
+        holiday_id: str,
+        updated_by: str,
+    ) -> bool:
+        """
+        Deactivate a holiday using soft delete.
+        """
+        holiday_repo = self._require_holiday_repo()
+
+        holiday = await holiday_repo.find_by_id(holiday_id)
+
+        if not holiday:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Holiday with ID '{holiday_id}' not found",
+            )
+
+        if not holiday.get("is_active", False):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Holiday is already inactive",
+            )
+
+        deactivated = await holiday_repo.deactivate(
+            holiday_id=holiday_id,
+            updated_by=updated_by,
+        )
+
+        if not deactivated:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to deactivate holiday",
+            )
+
+        return True
+
+    async def activate_holiday(
+        self,
+        holiday_id: str,
+        updated_by: str,
+    ) -> Dict[str, Any]:
+        """
+        Reactivate an inactive holiday.
+        """
+        holiday_repo = self._require_holiday_repo()
+
+        holiday = await holiday_repo.find_by_id(holiday_id)
+
+        if not holiday:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Holiday with ID '{holiday_id}' not found",
+            )
+
+        if holiday.get("is_active", False):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Holiday is already active",
+            )
+
+        validation_payload = {
+            key: value
+            for key, value in holiday.items()
+            if key not in {"_id", "id", "created_at", "updated_at"}
+        }
+        validation_payload["is_active"] = True
+        validation_payload["updated_by"] = updated_by
+
+        self._validate_holiday_payload(validation_payload)
+
+        activated = await holiday_repo.activate(
+            holiday_id=holiday_id,
+            updated_by=updated_by,
+        )
+
+        if not activated:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to activate holiday",
+            )
+
+        activated_holiday = await holiday_repo.find_by_id(holiday_id)
+
+        if not activated_holiday:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Holiday activated but failed to retrieve",
+            )
+
+        return activated_holiday
+
+    async def bulk_import_holidays(
+        self,
+        holidays: List[Dict[str, Any]],
+        created_by: str,
+        skip_duplicates: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Bulk import holidays.
+        """
+        holiday_repo = self._require_holiday_repo()
+
+        if not holidays:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Holidays list cannot be empty",
+            )
+
+        prepared_holidays: List[Dict[str, Any]] = []
+        skipped: List[Dict[str, Any]] = []
+        failed: List[Dict[str, Any]] = []
+        seen_keys: set[tuple[str, str, str]] = set()
+
+        for index, raw_holiday in enumerate(holidays):
+            try:
+                holiday_data = self._clean_payload(dict(raw_holiday))
+
+                holiday_date = holiday_data.get("date")
+                holiday_name = holiday_data.get("name")
+                location = holiday_data.get("location")
+
+                if not holiday_date:
+                    failed.append(
+                        {
+                            "index": index,
+                            "date": None,
+                            "name": holiday_name,
+                            "error": "Holiday date is required",
+                        }
+                    )
+                    continue
+
+                if not holiday_name:
+                    failed.append(
+                        {
+                            "index": index,
+                            "date": str(holiday_date),
+                            "name": None,
+                            "error": "Holiday name is required",
+                        }
+                    )
+                    continue
+
+                holiday_data["created_by"] = created_by
+                holiday_data["updated_by"] = created_by
+
+                self._validate_holiday_payload(holiday_data)
+
+                normalized_key = (
+                    str(holiday_date),
+                    str(holiday_name).strip().lower(),
+                    str(location or "all").strip().lower(),
+                )
+
+                if normalized_key in seen_keys:
+                    duplicate_error = {
+                        "index": index,
+                        "date": str(holiday_date),
+                        "name": holiday_name,
+                        "error": "Duplicate holiday inside import payload",
+                    }
+
+                    if skip_duplicates:
+                        skipped.append(duplicate_error)
+                        continue
+
+                    failed.append(duplicate_error)
+                    continue
+
+                if await holiday_repo.duplicate_exists(
+                    holiday_date=holiday_date,
+                    name=holiday_name,
+                    location=location,
+                ):
+                    duplicate_error = {
+                        "index": index,
+                        "date": str(holiday_date),
+                        "name": holiday_name,
+                        "error": "Holiday already exists",
+                    }
+
+                    if skip_duplicates:
+                        skipped.append(duplicate_error)
+                        continue
+
+                    failed.append(duplicate_error)
+                    continue
+
+                prepared_holidays.append(holiday_data)
+                seen_keys.add(normalized_key)
+
+            except HTTPException as exc:
+                failed.append(
+                    {
+                        "index": index,
+                        "date": str(raw_holiday.get("date")),
+                        "name": raw_holiday.get("name"),
+                        "error": exc.detail,
+                    }
+                )
+
+            except Exception as exc:
+                failed.append(
+                    {
+                        "index": index,
+                        "date": str(raw_holiday.get("date")),
+                        "name": raw_holiday.get("name"),
+                        "error": str(exc),
+                    }
+                )
+
+        created_ids, insert_errors = await holiday_repo.create_many(prepared_holidays)
+
+        failed.extend(insert_errors)
+
+        return {
+            "message": "Bulk holiday import completed",
+            "created_count": len(created_ids),
+            "skipped_count": len(skipped),
+            "failed_count": len(failed),
+            "created_ids": created_ids,
+            "errors": skipped + failed,
+        }
+
+    async def get_holiday_statistics(
+        self,
+        year: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Get holiday statistics.
+        """
+        holiday_repo = self._require_holiday_repo()
+        return await holiday_repo.get_statistics(year=year)
+
+    async def calculate_leave_days_using_holidays(
+        self,
+        from_date: Any,
+        to_date: Any,
+        location: Optional[str] = None,
+        exclude_weekends: bool = True,
+        include_optional_holidays: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Calculate leave days using holiday calendar.
+
+        This helper will be useful later in Leave Management.
+        """
+        holiday_repo = self._require_holiday_repo()
+
+        return await holiday_repo.calculate_leave_days(
+            from_date=from_date,
+            to_date=to_date,
+            location=location,
+            exclude_weekends=exclude_weekends,
+            include_optional_holidays=include_optional_holidays,
+        )
+
