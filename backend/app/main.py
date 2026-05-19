@@ -21,8 +21,11 @@ from backend.app.core.config import settings
 from backend.app.database.indexes import create_indexes
 from backend.app.database.mongo_connection import MongoDB
 from backend.app.database.redis_connection import RedisDB
+
 from backend.app.routes.auth import router as auth_router
 from backend.app.routes.master_data import router as master_data_router
+from backend.app.routes.company_setting import router as company_setting_router
+from backend.app.routes.employee import router as employee_router
 
 
 # -------------------------
@@ -63,13 +66,23 @@ async def lifespan(app: FastAPI):
         print(f"API prefix: {settings.API_PREFIX}")
         print(f"API documentation: http://localhost:{settings.PORT}/docs")
         print("Index summary:")
+
         for collection_name, result in index_results.items():
             total = result.get("total", 0) if isinstance(result, dict) else 0
             errors = result.get("errors", []) if isinstance(result, dict) else []
+
             print(
                 f"  - {collection_name}: {total} indexes checked/created, "
                 f"errors: {len(errors)}"
             )
+
+            if errors:
+                for error in errors:
+                    print(
+                        f"      index={error.get('index')} "
+                        f"error={error.get('error')}"
+                    )
+
         print("=" * 60)
 
     except Exception as exc:
@@ -84,10 +97,14 @@ async def lifespan(app: FastAPI):
     print("Shutting down HR AI Agent Backend")
     print("=" * 60)
 
-    await RedisDB.disconnect()
-    await MongoDB.disconnect()
+    try:
+        await RedisDB.disconnect()
+        await MongoDB.disconnect()
+        print("All services stopped")
 
-    print("All services stopped")
+    except Exception as exc:
+        print(f"Error during shutdown: {exc}")
+
     print("=" * 60)
 
 
@@ -110,15 +127,24 @@ app = FastAPI(
         "- Designation master data management\n"
         "- Leave type master data management\n"
         "- Claim type master data management\n"
-        "- Holiday calendar master data management\n\n"
+        "- Holiday calendar master data management\n"
+        "- Company settings management\n"
+        "- Employee profile management\n\n"
         "Master data capabilities:\n"
         "- Create, list, update, deactivate, and reactivate master records\n"
         "- Dropdown APIs for frontend forms\n"
         "- Bulk import APIs for Admin users\n"
         "- Statistics APIs for HR/Admin dashboards\n"
         "- Holiday calendar APIs for leave and payroll calculations\n\n"
+        "Employee module capabilities:\n"
+        "- Create employee profiles\n"
+        "- List/search/filter employees\n"
+        "- Employee dropdown and manager dropdown APIs\n"
+        "- Employee profile enrichment with department/designation/manager data\n"
+        "- Update employee profile, status, manager, bank, emergency contact, and address\n"
+        "- Employee statistics for HR/Admin dashboards\n"
+        "- Soft deactivate and reactivate employees\n\n"
         "Planned modules:\n"
-        "- Employee profiles\n"
         "- Leave management\n"
         "- Claim/reimbursement workflows\n"
         "- Payroll queries\n"
@@ -165,6 +191,16 @@ app.include_router(
     prefix=settings.API_PREFIX,
 )
 
+app.include_router(
+    company_setting_router,
+    prefix=settings.API_PREFIX,
+)
+
+app.include_router(
+    employee_router,
+    prefix=settings.API_PREFIX,
+)
+
 
 # -------------------------
 # Root endpoints
@@ -196,9 +232,10 @@ async def root():
             "master_data_leave_types",
             "master_data_claim_types",
             "master_data_holidays",
+            "company_settings",
+            "employee_profiles",
         ],
         "planned_modules": [
-            "employee_profiles",
             "leave_management",
             "claim_management",
             "payroll_queries",
@@ -239,6 +276,7 @@ async def health_check():
         client = MongoDB.get_client()
         await client.admin.command("ping")
         health_status["mongodb"] = "healthy"
+
     except Exception as exc:
         health_status["mongodb"] = f"unhealthy: {str(exc)}"
         all_healthy = False
@@ -247,6 +285,7 @@ async def health_check():
         redis_client = RedisDB.get_client()
         await redis_client.ping()
         health_status["redis"] = "healthy"
+
     except Exception as exc:
         health_status["redis"] = f"unhealthy: {str(exc)}"
         all_healthy = False

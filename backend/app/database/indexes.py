@@ -9,6 +9,8 @@ Indexes are created at application startup to ensure:
 - Unique leave type codes
 - Unique claim type codes
 - Unique holiday date/name/location records
+- Unique company settings per company_id
+- Unique employee records per company
 - Fast master data listing, filtering, searching, and hierarchy lookups
 
 Pattern:
@@ -18,6 +20,15 @@ Important:
 Index creation is idempotent.
 It is safe to run multiple times because MongoDB will not recreate the same
 index again if it already exists.
+
+Note:
+For users collection, some existing indexes already use older names:
+- idx_active_created
+- idx_role
+- idx_locked_until_sparse
+- idx_last_login
+
+We keep those names to avoid MongoDB IndexOptionsConflict errors.
 """
 
 from typing import Any, Dict, List
@@ -54,6 +65,8 @@ class IndexManager:
         results["leave_types"] = await self.create_leave_types_indexes()
         results["claim_types"] = await self.create_claim_types_indexes()
         results["holidays"] = await self.create_holidays_indexes()
+        results["company_settings"] = await self.create_company_settings_indexes()
+        results["employees"] = await self.create_employees_indexes()
 
         print("MongoDB indexes checked/created successfully")
 
@@ -113,14 +126,9 @@ class IndexManager:
         """
         Create indexes for users collection.
 
-        Indexes:
-        1. username unique
-        2. email unique
-        3. phone unique sparse
-        4. is_active + created_at
-        5. role
-        6. locked_until sparse
-        7. last_login sparse
+        Important:
+        These names match the indexes already present in your MongoDB database.
+        Do not rename these unless you first drop old user indexes.
         """
         index_definitions = [
             {
@@ -141,20 +149,20 @@ class IndexManager:
             },
             {
                 "keys": [("is_active", ASCENDING), ("created_at", DESCENDING)],
-                "name": "idx_users_active_created",
+                "name": "idx_active_created",
             },
             {
                 "keys": [("role", ASCENDING)],
-                "name": "idx_users_role",
+                "name": "idx_role",
             },
             {
                 "keys": [("locked_until", ASCENDING)],
-                "name": "idx_users_locked_until_sparse",
+                "name": "idx_locked_until_sparse",
                 "sparse": True,
             },
             {
                 "keys": [("last_login", DESCENDING)],
-                "name": "idx_users_last_login",
+                "name": "idx_last_login",
                 "sparse": True,
             },
         ]
@@ -171,14 +179,6 @@ class IndexManager:
     async def create_departments_indexes(self) -> Dict[str, Any]:
         """
         Create indexes for departments collection.
-
-        Indexes:
-        1. code unique
-        2. is_active + display_order
-        3. parent_id + is_active
-        4. location + is_active
-        5. name
-        6. text search index for name/code/description/location
         """
         index_definitions = [
             {
@@ -225,14 +225,6 @@ class IndexManager:
     async def create_designations_indexes(self) -> Dict[str, Any]:
         """
         Create indexes for designations collection.
-
-        Indexes:
-        1. code unique
-        2. is_active + display_order
-        3. department_id + is_active
-        4. level + is_active
-        5. name
-        6. text search index for name/code/description
         """
         index_definitions = [
             {
@@ -278,20 +270,6 @@ class IndexManager:
     async def create_leave_types_indexes(self) -> Dict[str, Any]:
         """
         Create indexes for leave_types collection.
-
-        Indexes:
-        1. code unique
-        2. is_active + display_order
-        3. is_paid + is_active
-        4. requires_approval + is_active
-        5. requires_documentation + is_active
-        6. carry_forward_allowed + is_active
-        7. encashment_allowed + is_active
-        8. is_accrued + is_active
-        9. available_during_probation + is_active
-        10. gender_specific + is_active
-        11. name
-        12. text search index for name/code/description
         """
         index_definitions = [
             {
@@ -371,27 +349,6 @@ class IndexManager:
     async def create_claim_types_indexes(self) -> Dict[str, Any]:
         """
         Create indexes for claim_types collection.
-
-        Indexes:
-        1. code unique
-        2. is_active + display_order
-        3. requires_bill + is_active
-        4. requires_approval + is_active
-        5. is_taxable + is_active
-        6. currency + is_active
-        7. available_during_probation + is_active
-        8. auto_approve_below + is_active
-        9. finance_approval_threshold + is_active
-        10. default_annual_limit
-        11. default_monthly_limit
-        12. max_claim_amount
-        13. name
-        14. text search index for name/code/description
-
-        Why unique code matters:
-        ClaimTypeRepository catches DuplicateKeyError during create.
-        That DuplicateKeyError only happens reliably if MongoDB has a unique
-        index on claim_types.code.
         """
         index_definitions = [
             {
@@ -479,24 +436,6 @@ class IndexManager:
     async def create_holidays_indexes(self) -> Dict[str, Any]:
         """
         Create indexes for holidays collection.
-
-        Indexes:
-        1. unique date + name + location
-        2. year + date
-        3. active + date
-        4. date + active
-        5. location + active
-        6. type + active
-        7. optional + active
-        8. working day + active
-        9. half day + active
-        10. display order + date
-        11. name
-        12. text search index for name/type/description/location
-
-        Why unique date/name/location matters:
-        HolidayRepository checks duplicate_exists(date, name, location).
-        This unique index protects the database level too.
         """
         index_definitions = [
             {
@@ -561,6 +500,238 @@ class IndexManager:
 
         return await self._create_indexes_for_collection(
             collection_name="holidays",
+            index_definitions=index_definitions,
+        )
+
+    # -------------------------
+    # Company Settings indexes
+    # -------------------------
+
+    async def create_company_settings_indexes(self) -> Dict[str, Any]:
+        """
+        Create indexes for company_settings collection.
+        """
+        index_definitions = [
+            {
+                "keys": [("company_id", ASCENDING)],
+                "name": "idx_company_settings_company_id_unique",
+                "unique": True,
+            },
+            {
+                "keys": [("is_active", ASCENDING), ("company_id", ASCENDING)],
+                "name": "idx_company_settings_active_company",
+            },
+            {
+                "keys": [("created_at", DESCENDING)],
+                "name": "idx_company_settings_created",
+            },
+            {
+                "keys": [("updated_at", DESCENDING)],
+                "name": "idx_company_settings_updated",
+            },
+            {
+                "keys": [("company_info.company_name", ASCENDING)],
+                "name": "idx_company_settings_company_name",
+            },
+            {
+                "keys": [("system.default_location", ASCENDING)],
+                "name": "idx_company_settings_default_location",
+                "sparse": True,
+            },
+            {
+                "keys": [("payroll.currency", ASCENDING)],
+                "name": "idx_company_settings_currency",
+            },
+            {
+                "keys": [("payroll.pay_cycle", ASCENDING)],
+                "name": "idx_company_settings_pay_cycle",
+            },
+        ]
+
+        return await self._create_indexes_for_collection(
+            collection_name="company_settings",
+            index_definitions=index_definitions,
+        )
+
+    # -------------------------
+    # Employees indexes
+    # -------------------------
+
+    async def create_employees_indexes(self) -> Dict[str, Any]:
+        """
+        Create indexes for employees collection.
+
+        Why company_id is included in unique indexes:
+        The employee model supports future multi-company usage.
+        EMP001 can exist in different companies, but not twice inside the same company.
+        """
+        index_definitions = [
+            {
+                "keys": [("company_id", ASCENDING), ("employee_code", ASCENDING)],
+                "name": "idx_employees_company_employee_code_unique",
+                "unique": True,
+            },
+            {
+                "keys": [("company_id", ASCENDING), ("user_id", ASCENDING)],
+                "name": "idx_employees_company_user_id_unique",
+                "unique": True,
+            },
+            {
+                "keys": [("company_id", ASCENDING), ("email", ASCENDING)],
+                "name": "idx_employees_company_email_unique",
+                "unique": True,
+            },
+            {
+                "keys": [("company_id", ASCENDING), ("phone", ASCENDING)],
+                "name": "idx_employees_company_phone_unique_sparse",
+                "unique": True,
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("is_active", ASCENDING),
+                    ("employment_status", ASCENDING),
+                ],
+                "name": "idx_employees_company_active_status",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("department_id", ASCENDING),
+                    ("is_active", ASCENDING),
+                ],
+                "name": "idx_employees_company_department_active",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("designation_id", ASCENDING),
+                    ("is_active", ASCENDING),
+                ],
+                "name": "idx_employees_company_designation_active",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("manager_id", ASCENDING),
+                    ("is_active", ASCENDING),
+                ],
+                "name": "idx_employees_company_manager_active",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("work_location", ASCENDING),
+                    ("is_active", ASCENDING),
+                ],
+                "name": "idx_employees_company_location_active",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("work_mode", ASCENDING),
+                    ("is_active", ASCENDING),
+                ],
+                "name": "idx_employees_company_work_mode_active",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("employee_type", ASCENDING),
+                    ("is_active", ASCENDING),
+                ],
+                "name": "idx_employees_company_employee_type_active",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("joining_date", DESCENDING),
+                ],
+                "name": "idx_employees_company_joining_date",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("probation_end_date", ASCENDING),
+                ],
+                "name": "idx_employees_company_probation_end",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("resignation_date", DESCENDING),
+                ],
+                "name": "idx_employees_company_resignation_date",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("last_working_date", DESCENDING),
+                ],
+                "name": "idx_employees_company_last_working_date",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_employees_company_created",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("updated_at", DESCENDING),
+                ],
+                "name": "idx_employees_company_updated",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("first_name", ASCENDING),
+                    ("last_name", ASCENDING),
+                ],
+                "name": "idx_employees_company_name",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("current_address.city", ASCENDING),
+                    ("is_active", ASCENDING),
+                ],
+                "name": "idx_employees_company_current_city_active",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("current_address.state", ASCENDING),
+                    ("is_active", ASCENDING),
+                ],
+                "name": "idx_employees_company_current_state_active",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("first_name", TEXT),
+                    ("middle_name", TEXT),
+                    ("last_name", TEXT),
+                    ("employee_code", TEXT),
+                    ("email", TEXT),
+                    ("personal_email", TEXT),
+                    ("phone", TEXT),
+                    ("work_location", TEXT),
+                ],
+                "name": "idx_employees_text_search",
+            },
+        ]
+
+        return await self._create_indexes_for_collection(
+            collection_name="employees",
             index_definitions=index_definitions,
         )
 
