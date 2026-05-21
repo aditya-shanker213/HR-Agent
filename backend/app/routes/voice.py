@@ -1,8 +1,12 @@
+# backend/app/routes/voice.py
+
 import json
 import uuid
 from fastapi import APIRouter, UploadFile, File, Form, Request, HTTPException
 from fastapi.responses import Response
 
+from app.agents.state import AgentState
+from app.agents.graph import AgentGraph
 from app.core.config import settings
 
 router = APIRouter(prefix="/voice", tags=["voice"])
@@ -12,9 +16,7 @@ MAX_HISTORY_TURNS = 10
 
 async def _get_history(redis, session_id: str) -> list[dict]:
     raw = await redis.get(f"session:{session_id}:history")
-    if not raw:
-        return []
-    return json.loads(raw)
+    return json.loads(raw) if raw else []
 
 
 async def _save_history(redis, session_id: str, history: list[dict]) -> None:
@@ -36,48 +38,61 @@ async def voice_chat(
     if not session_id:
         session_id = str(uuid.uuid4())
 
-    redis   = request.app.state.redis
-    stt     = request.app.state.stt
-    ai      = request.app.state.ai
-    tts     = request.app.state.tts
+    redis = request.app.state.redis
+    stt   = request.app.state.stt
+    tts   = request.app.state.tts
+    ai    = request.app.state.ai
 
-    # Read audio
+    # ── STT ──────────────────────────────────────────────────
     audio_bytes = await audio.read()
     if not audio_bytes:
-        raise HTTPException(400, "Empty audio file.")
-    if len(audio_bytes) > settings.MAX_AUDIO_SIZE_BYTES:
-        raise HTTPException(413, "Audio file too large.")
+        raise HTTPException(400, "Empty audio.")
 
-    # STT
     try:
         transcript = await stt.transcribe(audio_bytes)
     except ValueError as e:
         raise HTTPException(422, str(e))
     except Exception as e:
-        raise HTTPException(500, f"Transcription error: {e}")
+        raise HTTPException(500, f"STT error: {e}")
 
-    # History
-    history = await _get_history(redis, session_id)
+    # ── Agent graph ───────────────────────────────────────────
+    # Build the initial state with just what we know right now.
+    # context_builder_node fills the rest.
+    initial_state: AgentState = {
+        "session_id":            session_id,
+        "transcript":            transcript,
+        "conversation_history":  [],
+        "intent":                None,
+        "entities":              {},
+        "missing_fields":        [],
+        "response_text":         "",
+        "needs_clarification":   False,
+        "escalate":              False,
+        "tool_result":           None,
+    }
 
-    # LLM
+    graph = AgentGraph(ai_service=ai, redis=redis)
+
     try:
-        response_text = await ai.chat(
-            user_message=transcript,
-            conversation_history=history,
-        )
-    except TimeoutError:
-        raise HTTPException(504, "LLM timed out. Try a shorter question.")
+        result_state = await graph.run(initial_state)
     except Exception as e:
-        raise HTTPException(500, f"AI error: {e}")
+        raise HTTPException(500, f"Agent error: {e}")
 
-    # Save history
+    response_text = result_state["response_text"]
+
+    # Fallback if graph produced no response
+    if not response_text:
+        response_text = "I'm sorry, I didn't understand that. Could you rephrase?"
+
+    # ── Save conversation history ─────────────────────────────
+    history = await _get_history(redis, session_id)
     history += [
         {"role": "user",      "content": transcript},
         {"role": "assistant", "content": response_text},
     ]
     await _save_history(redis, session_id, history)
 
-    # TTS
+    # ── TTS ───────────────────────────────────────────────────
     try:
         audio_out = await tts.synthesize(response_text)
     except Exception as e:
@@ -90,8 +105,9 @@ async def voice_chat(
             "X-Session-ID":    session_id,
             "X-Transcript":    transcript,
             "X-Response-Text": response_text,
+            "X-Intent":        result_state.get("intent") or "unknown",
             "Access-Control-Expose-Headers":
-                "X-Session-ID, X-Transcript, X-Response-Text",
+                "X-Session-ID, X-Transcript, X-Response-Text, X-Intent",
         },
     )
 
