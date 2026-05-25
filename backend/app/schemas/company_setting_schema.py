@@ -485,8 +485,21 @@ class ClaimPolicyConfigSchema(BaseModel):
     enable_finance_approval: bool = Field(default=True)
     finance_approval_threshold: float = Field(default=20000.0, ge=0.0)
 
-    enable_auto_approval: bool = Field(default=True)
-    auto_approval_threshold: float = Field(default=1000.0, ge=0.0)
+    enable_auto_approval: bool = Field(
+        default=False,
+        description=(
+            "Deprecated/disabled. "
+            "Claims must go through manager/finance/HR approval workflow."
+        ),
+    )
+    auto_approval_threshold: float = Field(
+        default=0.0,
+        ge=0.0,
+        description=(
+            "Deprecated/disabled. "
+            "Must remain 0 because claim auto approval is not used."
+        ),
+    )
 
     claim_submission_deadline_days: int = Field(default=30, ge=1, le=365)
 
@@ -513,17 +526,15 @@ class ClaimPolicyConfigSchema(BaseModel):
                     "finance_approval_threshold must be 0 when enable_finance_approval=False"
                 )
 
-        if not self.enable_auto_approval:
-            if self.auto_approval_threshold != 0:
-                raise ValueError(
-                    "auto_approval_threshold must be 0 when enable_auto_approval=False"
-                )
+        if self.enable_auto_approval:
+            raise ValueError(
+                "Claim auto approval is disabled. Claims require human approval."
+            )
 
-        if self.enable_auto_approval and self.enable_manager_approval:
-            if self.auto_approval_threshold > self.manager_approval_threshold:
-                raise ValueError(
-                    "auto_approval_threshold cannot be greater than manager_approval_threshold"
-                )
+        if self.auto_approval_threshold != 0:
+            raise ValueError(
+                "auto_approval_threshold must be 0 because claim auto approval is disabled"
+            )
 
         if self.enable_manager_approval and self.enable_finance_approval:
             if self.finance_approval_threshold < self.manager_approval_threshold:
@@ -828,8 +839,15 @@ class ClaimPolicyConfigPatchSchema(BaseModel):
     enable_finance_approval: Optional[bool] = None
     finance_approval_threshold: Optional[float] = Field(default=None, ge=0.0)
 
-    enable_auto_approval: Optional[bool] = None
-    auto_approval_threshold: Optional[float] = Field(default=None, ge=0.0)
+    enable_auto_approval: Optional[bool] = Field(
+        default=None,
+        description="Deprecated/disabled. Passing True is not allowed.",
+    )
+    auto_approval_threshold: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Deprecated/disabled. Must be None or 0.",
+    )
 
     claim_submission_deadline_days: Optional[int] = Field(
         default=None,
@@ -854,13 +872,14 @@ class ClaimPolicyConfigPatchSchema(BaseModel):
 
     @model_validator(mode="after")
     def validate_partial_claim_rules(self):
-        if (
-            self.auto_approval_threshold is not None
-            and self.manager_approval_threshold is not None
-            and self.auto_approval_threshold > self.manager_approval_threshold
-        ):
+        if self.enable_auto_approval is True:
             raise ValueError(
-                "auto_approval_threshold cannot be greater than manager_approval_threshold"
+                "Claim auto approval is disabled. Claims require human approval."
+            )
+
+        if self.auto_approval_threshold not in (None, 0):
+            raise ValueError(
+                "auto_approval_threshold must be 0 because claim auto approval is disabled"
             )
 
         if (

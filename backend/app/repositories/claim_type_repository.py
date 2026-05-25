@@ -64,6 +64,7 @@ class ClaimTypeRepository:
         "id",
         "created_at",
         "created_by",
+        "auto_approve_below",
     }
 
     OPTIONAL_TEXT_FIELDS = {
@@ -211,7 +212,8 @@ class ClaimTypeRepository:
         cleaned.setdefault("requires_approval", True)
         cleaned.setdefault("approval_threshold", None)
         cleaned.setdefault("finance_approval_threshold", None)
-        cleaned.setdefault("auto_approve_below", None)
+        # Legacy/reference field only. New claim types must not enable auto approval.
+        cleaned["auto_approve_below"] = None
 
         cleaned.setdefault("reimbursement_percentage", 100)
         cleaned.setdefault("is_taxable", False)
@@ -520,24 +522,6 @@ class ClaimTypeRepository:
         claim_types = await cursor.to_list(length=500)
         return self._convert_many_ids(claim_types)
 
-    async def list_auto_approvable_active(self) -> List[Dict[str, Any]]:
-        """
-        List active claim types that have auto approval configured.
-        """
-        cursor = self.collection.find(
-            {
-                "is_active": True,
-                "auto_approve_below": {"$ne": None},
-            }
-        ).sort(
-            [
-                ("display_order", ASCENDING),
-                ("name", ASCENDING),
-            ]
-        )
-
-        claim_types = await cursor.to_list(length=500)
-        return self._convert_many_ids(claim_types)
 
     async def count(
         self,
@@ -715,7 +699,6 @@ class ClaimTypeRepository:
             "min_claim_amount",
             "approval_threshold",
             "finance_approval_threshold",
-            "auto_approve_below",
         }
 
         for index, item in enumerate(updates):
@@ -926,7 +909,7 @@ class ClaimTypeRepository:
             "requires_approval": claim_type.get("requires_approval", True),
             "approval_threshold": claim_type.get("approval_threshold"),
             "finance_approval_threshold": claim_type.get("finance_approval_threshold"),
-            "auto_approve_below": claim_type.get("auto_approve_below"),
+            "auto_approve_below": None,  # legacy/reference only, never used for approval
             "reimbursement_percentage": claim_type.get("reimbursement_percentage", 100),
             "is_taxable": claim_type.get("is_taxable", False),
             "available_during_probation": claim_type.get(
@@ -974,7 +957,7 @@ class ClaimTypeRepository:
             {"is_active": True, "requires_approval": True}
         )
 
-        auto_approval_enabled = await self.collection.count_documents(
+        legacy_auto_approval_configured = await self.collection.count_documents(
             {
                 "is_active": True,
                 "auto_approve_below": {"$ne": None},
@@ -1007,7 +990,7 @@ class ClaimTypeRepository:
             "requires_bill": requires_bill,
             "no_bill_required": no_bill_required,
             "requires_approval": requires_approval,
-            "auto_approval_enabled": auto_approval_enabled,
+            "legacy_auto_approval_configured": legacy_auto_approval_configured,
             "finance_approval_enabled": finance_approval_enabled,
             "taxable": taxable,
             "non_taxable": non_taxable,

@@ -11,7 +11,9 @@ Indexes are created at application startup to ensure:
 - Unique holiday date/name/location records
 - Unique company settings per company_id
 - Unique employee records per company
-- Fast master data listing, filtering, searching, and hierarchy lookups
+- Unique leave request records per company
+- Unique claim records per company
+- Fast master data listing, filtering, searching, and workflow lookups
 
 Pattern:
 FastAPI startup -> MongoDB connect -> create_indexes(db)
@@ -67,6 +69,8 @@ class IndexManager:
         results["holidays"] = await self.create_holidays_indexes()
         results["company_settings"] = await self.create_company_settings_indexes()
         results["employees"] = await self.create_employees_indexes()
+        results["leave_requests"] = await self.create_leave_requests_indexes()
+        results["claims"] = await self.create_claims_indexes()
 
         print("MongoDB indexes checked/created successfully")
 
@@ -382,11 +386,6 @@ class IndexManager:
                     ("is_active", ASCENDING),
                 ],
                 "name": "idx_claim_types_probation_active",
-            },
-            {
-                "keys": [("auto_approve_below", ASCENDING), ("is_active", ASCENDING)],
-                "name": "idx_claim_types_auto_approve_active",
-                "sparse": True,
             },
             {
                 "keys": [
@@ -732,6 +731,572 @@ class IndexManager:
 
         return await self._create_indexes_for_collection(
             collection_name="employees",
+            index_definitions=index_definitions,
+        )
+
+    # -------------------------
+    # Leave Requests indexes
+    # -------------------------
+
+    async def create_leave_requests_indexes(self) -> Dict[str, Any]:
+        """
+        Create indexes for leave_requests collection.
+
+        These indexes support:
+        - Unique leave request ID per company
+        - HRMS imported/read-only leave records
+        - Employee leave history
+        - Pending approvals
+        - Manager/HR dashboards
+        - Calendar view
+        - Conflict detection
+        - Leave statistics
+        - Search/filter APIs
+        """
+        index_definitions = [
+            {
+                "keys": [("company_id", ASCENDING), ("leave_request_id", ASCENDING)],
+                "name": "idx_leave_requests_company_request_id_unique",
+                "unique": True,
+            },
+            {
+                "keys": [("company_id", ASCENDING), ("external_hrms_id", ASCENDING)],
+                "name": "idx_leave_requests_company_external_hrms_id_unique_sparse",
+                "unique": True,
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("employee_id", ASCENDING),
+                    ("applied_date", DESCENDING),
+                ],
+                "name": "idx_leave_requests_company_employee_applied",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("employee_id", ASCENDING),
+                    ("status", ASCENDING),
+                    ("start_date", DESCENDING),
+                ],
+                "name": "idx_leave_requests_company_employee_status_start",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("employee_code", ASCENDING),
+                    ("applied_date", DESCENDING),
+                ],
+                "name": "idx_leave_requests_company_employee_code_applied",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("status", ASCENDING),
+                    ("applied_date", DESCENDING),
+                ],
+                "name": "idx_leave_requests_company_status_applied",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("current_approver_id", ASCENDING),
+                    ("status", ASCENDING),
+                    ("applied_date", ASCENDING),
+                ],
+                "name": "idx_leave_requests_company_approver_status_applied",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("leave_type_id", ASCENDING),
+                    ("status", ASCENDING),
+                    ("start_date", DESCENDING),
+                ],
+                "name": "idx_leave_requests_company_leave_type_status_start",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("leave_type_code", ASCENDING),
+                    ("status", ASCENDING),
+                    ("start_date", DESCENDING),
+                ],
+                "name": "idx_leave_requests_company_leave_type_code_status_start",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("department_id", ASCENDING),
+                    ("status", ASCENDING),
+                    ("start_date", DESCENDING),
+                ],
+                "name": "idx_leave_requests_company_department_status_start",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("manager_id", ASCENDING),
+                    ("status", ASCENDING),
+                    ("start_date", DESCENDING),
+                ],
+                "name": "idx_leave_requests_company_manager_status_start",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("start_date", ASCENDING),
+                    ("end_date", ASCENDING),
+                    ("status", ASCENDING),
+                ],
+                "name": "idx_leave_requests_company_date_range_status",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("employee_id", ASCENDING),
+                    ("start_date", ASCENDING),
+                    ("end_date", ASCENDING),
+                    ("status", ASCENDING),
+                ],
+                "name": "idx_leave_requests_company_employee_date_range_status",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("source", ASCENDING),
+                    ("is_read_only", ASCENDING),
+                ],
+                "name": "idx_leave_requests_company_source_readonly",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("is_emergency", ASCENDING),
+                    ("status", ASCENDING),
+                    ("applied_date", DESCENDING),
+                ],
+                "name": "idx_leave_requests_company_emergency_status_applied",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("is_backdated", ASCENDING),
+                    ("status", ASCENDING),
+                    ("applied_date", DESCENDING),
+                ],
+                "name": "idx_leave_requests_company_backdated_status_applied",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("is_half_day", ASCENDING),
+                    ("status", ASCENDING),
+                    ("start_date", DESCENDING),
+                ],
+                "name": "idx_leave_requests_company_half_day_status_start",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("has_conflict", ASCENDING),
+                    ("status", ASCENDING),
+                    ("applied_date", DESCENDING),
+                ],
+                "name": "idx_leave_requests_company_conflict_status_applied",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("documentation_required", ASCENDING),
+                    ("documentation_received", ASCENDING),
+                    ("status", ASCENDING),
+                ],
+                "name": "idx_leave_requests_company_documentation_status",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("balance_action", ASCENDING),
+                    ("status", ASCENDING),
+                ],
+                "name": "idx_leave_requests_company_balance_action_status",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_leave_requests_company_created",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("updated_at", DESCENDING),
+                ],
+                "name": "idx_leave_requests_company_updated",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("approved_date", DESCENDING),
+                ],
+                "name": "idx_leave_requests_company_approved_date",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("rejected_date", DESCENDING),
+                ],
+                "name": "idx_leave_requests_company_rejected_date",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("cancelled_date", DESCENDING),
+                ],
+                "name": "idx_leave_requests_company_cancelled_date",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("withdrawn_date", DESCENDING),
+                ],
+                "name": "idx_leave_requests_company_withdrawn_date",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("leave_request_id", TEXT),
+                    ("employee_code", TEXT),
+                    ("employee_name", TEXT),
+                    ("leave_type_code", TEXT),
+                    ("leave_type_name", TEXT),
+                    ("reason", TEXT),
+                    ("department_name", TEXT),
+                    ("manager_name", TEXT),
+                ],
+                "name": "idx_leave_requests_text_search",
+            },
+        ]
+
+        return await self._create_indexes_for_collection(
+            collection_name="leave_requests",
+            index_definitions=index_definitions,
+        )
+
+
+    # -------------------------
+    # Claims indexes
+    # -------------------------
+
+    async def create_claims_indexes(self) -> Dict[str, Any]:
+        """
+        Create indexes for claims collection.
+
+        These indexes support:
+        - Unique claim ID per company
+        - HRMS imported/read-only claim records
+        - Employee claim history
+        - Manager/HR/Finance approval queues
+        - Structured approval step lookup
+        - Claim type, department, manager, status, source, and payment filters
+        - Duplicate detection helper queries
+        - Payment processing dashboards
+        - Claim statistics and reporting
+
+        Important:
+        - Claim auto approval is disabled.
+        - Do not create indexes for auto approval workflows.
+        """
+        index_definitions = [
+            {
+                "keys": [("company_id", ASCENDING), ("claim_id", ASCENDING)],
+                "name": "idx_claims_company_claim_id_unique",
+                "unique": True,
+            },
+            {
+                "keys": [("company_id", ASCENDING), ("external_hrms_id", ASCENDING)],
+                "name": "idx_claims_company_external_hrms_id_unique_sparse",
+                "unique": True,
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("employee_id", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_claims_company_employee_created",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("employee_id", ASCENDING),
+                    ("status", ASCENDING),
+                    ("expense_date", DESCENDING),
+                ],
+                "name": "idx_claims_company_employee_status_expense",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("employee_code", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_claims_company_employee_code_created",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("status", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_claims_company_status_created",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("status", ASCENDING),
+                    ("expense_date", DESCENDING),
+                ],
+                "name": "idx_claims_company_status_expense",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("claim_type_id", ASCENDING),
+                    ("status", ASCENDING),
+                    ("expense_date", DESCENDING),
+                ],
+                "name": "idx_claims_company_claim_type_status_expense",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("claim_type_code", ASCENDING),
+                    ("status", ASCENDING),
+                    ("expense_date", DESCENDING),
+                ],
+                "name": "idx_claims_company_claim_type_code_status_expense",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("department_id", ASCENDING),
+                    ("status", ASCENDING),
+                    ("expense_date", DESCENDING),
+                ],
+                "name": "idx_claims_company_department_status_expense",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("manager_id", ASCENDING),
+                    ("status", ASCENDING),
+                    ("expense_date", DESCENDING),
+                ],
+                "name": "idx_claims_company_manager_status_expense",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("priority", ASCENDING),
+                    ("status", ASCENDING),
+                    ("created_at", ASCENDING),
+                ],
+                "name": "idx_claims_company_priority_status_created",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("payment_status", ASCENDING),
+                    ("status", ASCENDING),
+                    ("updated_at", DESCENDING),
+                ],
+                "name": "idx_claims_company_payment_status_updated",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("source", ASCENDING),
+                    ("is_read_only", ASCENDING),
+                ],
+                "name": "idx_claims_company_source_readonly",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("amount", ASCENDING),
+                    ("status", ASCENDING),
+                ],
+                "name": "idx_claims_company_amount_status",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("approved_amount", ASCENDING),
+                    ("status", ASCENDING),
+                ],
+                "name": "idx_claims_company_approved_amount_status",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("paid_amount", ASCENDING),
+                    ("payment_status", ASCENDING),
+                ],
+                "name": "idx_claims_company_paid_amount_payment_status",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("expense_date", ASCENDING),
+                    ("status", ASCENDING),
+                ],
+                "name": "idx_claims_company_expense_date_status",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_claims_company_created",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("updated_at", DESCENDING),
+                ],
+                "name": "idx_claims_company_updated",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("submitted_at", DESCENDING),
+                ],
+                "name": "idx_claims_company_submitted_at",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("approved_at", DESCENDING),
+                ],
+                "name": "idx_claims_company_approved_at",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("rejected_at", DESCENDING),
+                ],
+                "name": "idx_claims_company_rejected_at",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("cancelled_at", DESCENDING),
+                ],
+                "name": "idx_claims_company_cancelled_at",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("withdrawn_at", DESCENDING),
+                ],
+                "name": "idx_claims_company_withdrawn_at",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("payment_date", DESCENDING),
+                ],
+                "name": "idx_claims_company_payment_date",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("synced_to_hrms", ASCENDING),
+                    ("synced_at", DESCENDING),
+                ],
+                "name": "idx_claims_company_hrms_sync",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("approval_steps.approval_status", ASCENDING),
+                    ("approval_steps.approver_role", ASCENDING),
+                    ("created_at", ASCENDING),
+                ],
+                "name": "idx_claims_company_approval_status_role_created",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("approval_steps.approver_id", ASCENDING),
+                    ("approval_steps.approval_status", ASCENDING),
+                    ("created_at", ASCENDING),
+                ],
+                "name": "idx_claims_company_approval_approver_status_created",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("current_approval_role", ASCENDING),
+                    ("status", ASCENDING),
+                    ("created_at", ASCENDING),
+                ],
+                "name": "idx_claims_company_current_approval_role_status_created",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("employee_id", ASCENDING),
+                    ("claim_type_id", ASCENDING),
+                    ("expense_date", ASCENDING),
+                    ("amount", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_claims_duplicate_detection",
+            },
+            {
+                "keys": [
+                    ("claim_id", TEXT),
+                    ("employee_code", TEXT),
+                    ("employee_name", TEXT),
+                    ("claim_type_code", TEXT),
+                    ("claim_type_name", TEXT),
+                    ("title", TEXT),
+                    ("description", TEXT),
+                    ("vendor_name", TEXT),
+                    ("bill_number", TEXT),
+                    ("department_name", TEXT),
+                    ("manager_name", TEXT),
+                ],
+                "name": "idx_claims_text_search",
+            },
+        ]
+
+        return await self._create_indexes_for_collection(
+            collection_name="claims",
             index_definitions=index_definitions,
         )
 

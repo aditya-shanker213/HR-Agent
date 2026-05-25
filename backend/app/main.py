@@ -26,6 +26,8 @@ from backend.app.routes.auth import router as auth_router
 from backend.app.routes.master_data import router as master_data_router
 from backend.app.routes.company_setting import router as company_setting_router
 from backend.app.routes.employee import router as employee_router
+from backend.app.routes.leave import router as leave_router
+from backend.app.routes.claim import router as claim_router
 
 
 # -------------------------
@@ -129,7 +131,15 @@ app = FastAPI(
         "- Claim type master data management\n"
         "- Holiday calendar master data management\n"
         "- Company settings management\n"
-        "- Employee profile management\n\n"
+        "- Employee profile management\n"
+        "- Leave management workflow\n"
+        "- Claim/reimbursement management workflow\n\n"
+        "Architecture direction:\n"
+        "- MongoDB acts as mock HRMS for MVP/local mode\n"
+        "- Production can later use real HRMS read-only or approved-write APIs\n"
+        "- LLM should never directly access the database\n"
+        "- Backend services/tools control all sensitive operations\n"
+        "- AI must never approve money-related claims\n\n"
         "Master data capabilities:\n"
         "- Create, list, update, deactivate, and reactivate master records\n"
         "- Dropdown APIs for frontend forms\n"
@@ -144,10 +154,34 @@ app = FastAPI(
         "- Update employee profile, status, manager, bank, emergency contact, and address\n"
         "- Employee statistics for HR/Admin dashboards\n"
         "- Soft deactivate and reactivate employees\n\n"
+        "Leave module capabilities:\n"
+        "- Employee leave request creation\n"
+        "- Working-day calculation with weekends/holidays\n"
+        "- Leave balance validation\n"
+        "- Manager/HR approval workflow\n"
+        "- Approve, reject, cancel, and withdraw leave\n"
+        "- Leave attachment metadata\n"
+        "- Pending approval queue\n"
+        "- Employee leave history and statistics\n"
+        "- HR/Admin leave dashboard statistics\n"
+        "- Leave calendar view\n"
+        "- HRMS read-only record import support\n\n"
+        "Claim module capabilities:\n"
+        "- Employee claim/reimbursement creation\n"
+        "- Draft claim support\n"
+        "- Duplicate claim detection\n"
+        "- Claim limit validation\n"
+        "- Bill/receipt attachment metadata\n"
+        "- Manager/HR approval workflow\n"
+        "- Finance approval workflow based on threshold\n"
+        "- Send back, resubmit, cancel, and withdraw claim actions\n"
+        "- Payment processing workflow\n"
+        "- Claim statistics and HR/Admin dashboard\n"
+        "- HRMS read-only record import support\n"
+        "- Claim auto approval disabled by design\n\n"
         "Planned modules:\n"
-        "- Leave management\n"
-        "- Claim/reimbursement workflows\n"
         "- Payroll queries\n"
+        "- Audit logs and tool logs\n"
         "- RAG-based HR policy Q&A\n"
         "- LangGraph AI agent workflows\n"
         "- Voice-based HR assistant\n"
@@ -201,6 +235,16 @@ app.include_router(
     prefix=settings.API_PREFIX,
 )
 
+app.include_router(
+    leave_router,
+    prefix=settings.API_PREFIX,
+)
+
+app.include_router(
+    claim_router,
+    prefix=settings.API_PREFIX,
+)
+
 
 # -------------------------
 # Root endpoints
@@ -234,11 +278,27 @@ async def root():
             "master_data_holidays",
             "company_settings",
             "employee_profiles",
-        ],
-        "planned_modules": [
             "leave_management",
             "claim_management",
+        ],
+        "architecture": {
+            "mvp_database_mode": "MongoDB as mock HRMS",
+            "production_direction": "real HRMS integration through safe backend APIs/tools",
+            "llm_database_access": "not allowed",
+            "ai_claim_approval": "not allowed",
+            "claim_auto_approval": "disabled",
+        },
+        "claim_module": {
+            "status": "enabled",
+            "auto_approval": "disabled",
+            "approval_flow": "manager_or_hr_then_finance_if_required",
+            "hrms_mode": "read_only_import_supported",
+            "payment_flow": "finance_or_hr_controlled",
+        },
+        "planned_modules": [
             "payroll_queries",
+            "audit_logs",
+            "tool_logs",
             "policy_rag",
             "langgraph_ai_agent",
             "voice_assistant",

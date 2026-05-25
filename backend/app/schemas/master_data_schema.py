@@ -1488,7 +1488,10 @@ class CreateClaimTypeRequest(BaseModel):
     auto_approve_below: Optional[int] = Field(
         default=None,
         ge=0,
-        description="Auto-approve claims below or equal to this amount",
+        description=(
+            "Deprecated/disabled. This field must not auto-approve claims. "
+            "Claims must go through manager/finance/HR approval workflow."
+        ),
     )
 
     reimbursement_percentage: int = Field(
@@ -1601,21 +1604,9 @@ class CreateClaimTypeRequest(BaseModel):
             )
 
         if self.auto_approve_below is not None:
-            if (
-                self.approval_threshold is not None
-                and self.auto_approve_below > self.approval_threshold
-            ):
-                raise ValueError(
-                    "auto_approve_below cannot be greater than approval_threshold"
-                )
-
-            if (
-                self.max_claim_amount is not None
-                and self.auto_approve_below > self.max_claim_amount
-            ):
-                raise ValueError(
-                    "auto_approve_below cannot be greater than max_claim_amount"
-                )
+            raise ValueError(
+                "auto_approve_below is disabled. Claims must go through human approval."
+            )
 
         return self
 
@@ -1658,7 +1649,14 @@ class UpdateClaimTypeRequest(BaseModel):
     requires_approval: Optional[bool] = Field(default=None)
     approval_threshold: Optional[int] = Field(default=None, ge=0)
     finance_approval_threshold: Optional[int] = Field(default=None, ge=0)
-    auto_approve_below: Optional[int] = Field(default=None, ge=0)
+    auto_approve_below: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Deprecated/disabled. Passing this value is not allowed. "
+            "Claims must go through human approval."
+        ),
+    )
 
     reimbursement_percentage: Optional[int] = Field(default=None, ge=0, le=100)
     is_taxable: Optional[bool] = Field(default=None)
@@ -1712,6 +1710,18 @@ class UpdateClaimTypeRequest(BaseModel):
             return None
 
         return normalize_file_types(value)
+
+    @model_validator(mode="after")
+    def validate_disabled_auto_approval(self):
+        """
+        Claim auto approval is disabled for reimbursement workflows.
+        """
+        if self.auto_approve_below is not None:
+            raise ValueError(
+                "auto_approve_below is disabled. Claims must go through human approval."
+            )
+
+        return self
 
 
 class ClaimTypeListResponse(BaseModel):
@@ -1942,7 +1952,14 @@ class ClaimTypeStatisticsResponse(BaseModel):
     taxable: int = Field(default=0, ge=0)
     non_taxable: int = Field(default=0, ge=0)
     available_during_probation: int = Field(default=0, ge=0)
-    auto_approval_enabled: int = Field(default=0, ge=0)
+    legacy_auto_approval_configured: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Legacy/reference count only. "
+            "This does not mean claims are auto-approved."
+        ),
+    )
 
 
 # -------------------------

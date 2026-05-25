@@ -139,7 +139,11 @@ class ClaimType(BaseModel):
     auto_approve_below: Optional[int] = Field(
         default=None,
         ge=0,
-        description="Auto-approve claims below or equal to this amount",
+        description=(
+            "Legacy/reference threshold only. "
+            "This field must not auto-approve claims. "
+            "Claim approval must go through manager/finance/HR workflow."
+        ),
     )
 
     # -------------------------
@@ -376,18 +380,9 @@ class ClaimType(BaseModel):
                         "finance_approval_threshold cannot be greater than max_claim_amount"
                     )
 
-        if self.auto_approve_below is not None:
-            if self.max_claim_amount is not None:
-                if self.auto_approve_below > self.max_claim_amount:
-                    raise ValueError(
-                        "auto_approve_below cannot be greater than max_claim_amount"
-                    )
-
-            if self.approval_threshold is not None:
-                if self.auto_approve_below > self.approval_threshold:
-                    raise ValueError(
-                        "auto_approve_below cannot be greater than approval_threshold"
-                    )
+        # auto_approve_below is legacy/reference only.
+        # It must not control approval workflow.
+        # No business validation is required for approval behavior here.
 
         return self
 
@@ -538,6 +533,13 @@ class ClaimTypeStatistics(BaseModel):
     inactive_claim_types: int = Field(default=0, ge=0)
     bill_required_claim_types: int = Field(default=0, ge=0)
     approval_required_claim_types: int = Field(default=0, ge=0)
-    auto_approval_enabled_claim_types: int = Field(default=0, ge=0)
+    legacy_auto_approval_configured_claim_types: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Legacy/reference count only. "
+            "This does not mean claims are auto-approved."
+        ),
+    )
     taxable_claim_types: int = Field(default=0, ge=0)
     probation_available_claim_types: int = Field(default=0, ge=0)
