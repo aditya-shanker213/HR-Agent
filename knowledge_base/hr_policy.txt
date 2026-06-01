@@ -1,0 +1,123 @@
+HUMAN RESOURCE POLICY — Giggs Software Labs Pvt. Ltd.
+Company: Giggs Software Labs Pvt. Ltd.
+Location: Noida, Uttar Pradesh, India
+Industry: Information Technology / Artificial Intelligence / Software Development
+
+SECTION 1: INTRODUCTION
+The HR Policy outlines principles and procedures for managing workforce effectively. It applies to all permanent, probationary, contractual, temporary, and internship employees.
+
+SECTION 2: OBJECTIVES
+- Provide clear HR guidelines and procedures
+- Ensure equal employment opportunities
+- Create a positive and safe workplace
+- Establish transparent systems for performance and rewards
+- Encourage employee engagement and development
+- Maintain discipline and professional ethics
+- Comply with applicable employment laws
+
+SECTION 3: RECRUITMENT & SELECTION
+Merit-based recruitment process including: Resume Screening, Technical Assessment, HR Interview, Technical/Managerial Interview, Final Selection Offer Rollout.
+Required documents: Government ID, Address Proof, Educational Certificates, Experience Certificates, Passport Photos, PAN Card, Aadhaar Card, Bank Details.
+
+SECTION 4: EMPLOYMENT CATEGORIES
+- Permanent Employees
+- Probationary Employees
+- Contract Employees
+- Interns/Trainees
+- Consultants/Freelancers
+Terms and conditions differ by employment type.
+
+SECTION 5: PROBATION & CONFIRMATION
+Probation period: 3 to 6 months for all newly hired employees.
+During probation: performance and conduct evaluated, employment may be terminated without notice for unsatisfactory performance or misconduct.
+Confirmation provided in writing after successful probation. Probation may be extended if required.
+
+SECTION 6: CODE OF CONDUCT
+Employees must: treat colleagues respectfully, maintain confidentiality, avoid harassment or discrimination, follow ethical practices, use company resources responsibly, maintain punctuality.
+Strictly prohibited: harassment or bullying, fraud or theft, unauthorized disclosure of confidential information, substance abuse during working hours, violence or abusive behavior, misuse of company systems.
+
+SECTION 7: WORKING HOURS & ATTENDANCE
+Working Days: Monday to Friday
+Office Timing: 9:30 AM to 6:30 PM
+Lunch Break: 1 Hour
+Employees must mark attendance through designated systems, inform managers of late arrival or absence, maintain regular attendance and punctuality.
+Repeated late attendance or absenteeism may lead to disciplinary action.
+
+SECTION 8: LEAVE POLICY
+Leave Entitlement:
+- Casual Leave (CL): 12 days annually
+- Sick Leave (SL): 12 days annually
+- Earned Leave (EL): 15 days annually
+- Public Holidays: As per company calendar
+- Maternity Leave: As per applicable law (26 weeks for first two children as per Maternity Benefit Act)
+- Paternity Leave: 5 working days
+Leave Rules: Leave must be applied through official system. Emergency leave should be informed immediately. Unauthorized absence may result in salary deductions. Leave encashment follows company policy.
+
+SECTION 9: COMPENSATION & PAYROLL
+Salary Components: Basic Salary, House Rent Allowance, Special Allowance, Performance Incentives, Bonus where applicable.
+Payroll Process: Salaries credited monthly. Statutory deductions include PF, ESI, TDS. Payslips shared electronically.
+
+SECTION 10: PERFORMANCE MANAGEMENT & APPRAISAL
+Assessment parameters: Quality of work, Technical competency, Communication skills, Team collaboration, Timely delivery, Innovation and initiative.
+Appraisals conducted annually or bi-annually.
+Performance outcomes impact: Salary increments, Promotions, Bonuses, Training opportunities.
+
+SECTION 11: TRAINING & DEVELOPMENT
+Employees may receive: Technical training, Soft skills training, Leadership development, AI/ML and software development workshops, Certification support programs.
+
+SECTION 12: WORK FROM HOME POLICY
+Remote work allowed based on role requirements and management approval.
+WFH requirements: available during working hours, maintain productivity and communication, ensure confidentiality and data security, attend virtual meetings regularly.
+Company reserves the right to modify remote work permissions.
+
+SECTION 13: DRESS CODE
+Acceptable: Smart casuals, Business formals during meetings and client interactions.
+Discouraged: Offensive clothing, Excessively casual attire, Clothing displaying offensive messages.
+
+SECTION 14: EMPLOYEE BENEFITS
+Eligible employees may receive: Provident Fund (PF), Employee State Insurance (ESI), Health Insurance, Paid Leaves, Performance Incentives, Learning and Development Opportunities, Flexible Work Arrangements.
+Benefits vary by employee category.
+
+SECTION 15: GRIEVANCE REDRESSAL
+Employees may raise concerns about: work environment, harassment, discrimination, compensation, team conflicts, managerial concerns.
+Process: Discuss with Reporting Manager → Escalate to HR if unresolved → Formal review by management → Resolution and communication.
+All grievancdled confidentially.
+
+SECTION 16: PREVENTION OF SEXUAL HARASSMENT (POSH)
+Zero tolerance policy. Sexual harassment includes: unwelcome physical contact, sexually colored remarks, inappropriate messages, demands for sexual favors, offensive jokes.
+Internal Complaints Committee (ICC) established as per law. All complaints investigated confidentially.
+
+SECTION 17: DISCIPLINARY POLICY
+Disciplinary action for: misconduct, breach of confidentiality, fraudulent activities, policy violations, repeated absenteeism, harassment or abusive behavior.
+Actions include: Warning Letter, Salary deduction, Suspension, Termination.
+
+SECTION 18: DATA SECURITY & CONFIDENTIALITY
+Confidential information includes: source code, client information, financial records, internal documents, login credentials, product strategies.
+Employees must not: share confidential data externally, use unauthorized software, access restricted systems without permission.
+
+SECTION 19: RESIGNATION & TERMINATION
+Resignation: Written resignation required.
+Notice period: Probationary employees 15 days, Confirmed employees 30 to 60 days.
+Termination for: poor performance, misconduct, policy violations, business restructuring.
+Exit formalities must be completed before final settlement.
+
+SECTION 20: TRAVEL & REIMBURSEMENT
+Reimbursable expenses for official travel: travel expenses, accommodation, meals, local transportation.
+All reimbursements must have bills and manager approval.
+
+SECTION 21: HEALTH, SAFETY & WORKPLACE CONDUCT
+Employees must follow safety procedures, maintain workplace cleanliness, avoid unsafe practices, report hazards immediately.
+Prohibited on premises: smoking, alcohol consumption, illegal substances.
+
+SECTION 22: EQUAL OPPORTUNITY
+Equal opportunity employer. No discrimination based on: gender, religion, caste, race, disability, age, sexual orientation, marital status.
+Employment decisions based solely on merit and qualifications.
+
+SECTION 23: WHISTLEBLOWER POLICY
+Employees encouraged to report unethical behavior, fraud, corruption, policy violations.
+Reports handled confidentially, investigated fairly, protected from retaliation.
+Report to HR or senior management.
+
+SECTION 24: AMENDMENTS
+Company reserves right to amend, modify, or discontinue any part of this policy.
+Employees informed of major changes through official communication channels.

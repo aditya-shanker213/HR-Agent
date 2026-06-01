@@ -1,0 +1,222 @@
+/* ── Reset ───────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0a0a0c;
+  --surface:   #111116;
+  --surface2:  #18181f;
+  --border:    rgba(255,255,255,0.07);
+  --border2:   rgba(255,255,255,0.13);
+  --text:      #e8e6f0;
+  --muted:     rgba(232,230,240,0.45);
+  --accent:    #6c63ff;
+  --accent2:   #a89cff;
+  --success:   #3ecf8e;
+  --danger:    #ff5c5c;
+  --mono:      'DM Mono', 'Courier New', monospace;
+  --display:   'Syne', 'Segoe UI', sans-serif;
+  --radius:    16px;
+  --radius-sm: 8px;
+}
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;500;600;700&display=swap');
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--display);
+  overflow: hidden;
+}
+
+/* ── Background ──────────────────────────────────────── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 60% 60% at 20% 50%, rgba(108,99,255,0.08) 0%, transparent 70%),
+    radial-gradient(ellipse 40% 40% at 80% 20%, rgba(62,207,142,0.05) 0%, transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ── Layout ──────────────────────────────────────────── */
+.container {
+  position: relative;
+  z-index: 1;
+  height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+/* ── Left panel ──────────────────────────────────────── */
+.left-panel {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 60px;
+  border-right: 1px solid var(--border);
+  animation: fade-up 0.6s ease forwards;
+  opacity: 0;
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.left-panel h1 {
+  font-size: 42px;
+  font-weight: 700;
+  letter-spacing: -1px;
+  line-height: 1.1;
+  margin-bottom: 16px;
+  background: linear-gradient(135deg, var(--text) 0%, var(--accent2) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.left-panel > p {
+  font-size: 15px;
+  color: var(--muted);
+  font-family: var(--mono);
+  letter-spacing: 0.04em;
+  margin-bottom: 40px;
+}
+
+.roles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.roles span {
+  padding: 6px 14px;
+  border-radius: 100px;
+  border: 1px solid var(--border2);
+  background: var(--surface);
+  font-size: 12px;
+  font-family: var(--mono);
+  color: var(--muted);
+  letter-spacing: 0.05em;
+}
+
+/* ── Right panel ─────────────────────────────────────── */
+.right-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 60px;
+  animation: fade-up 0.6s 0.15s ease forwards;
+  opacity: 0;
+}
+
+/* ── Login box ───────────────────────────────────────── */
+.login-box {
+  width: 100%;
+  max-width: 400px;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  padding: 40px;
+}
+
+.login-box h2 {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+  margin-bottom: 6px;
+}
+
+.login-box > p {
+  font-size: 13px;
+  font-family: var(--mono);
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  margin-bottom: 32px;
+}
+
+/* ── Form ────────────────────────────────────────────── */
+#loginForm {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+#loginForm input {
+  width: 100%;
+  padding: 13px 16px;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+#loginForm input::placeholder {
+  color: var(--muted);
+}
+
+#loginForm input:focus {
+  border-color: var(--accent);
+}
+
+#loginForm button {
+  width: 100%;
+  padding: 13px;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: #fff;
+  font-family: var(--display);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-top: 4px;
+  letter-spacing: 0.02em;
+}
+
+#loginForm button:hover {
+  background: var(--accent2);
+  transform: translateY(-1px);
+}
+
+#loginForm button:active {
+  transform: translateY(0);
+}
+
+/* ── Message ─────────────────────────────────────────── */
+#message {
+  margin-top: 16px;
+  font-size: 13px;
+  font-family: var(--mono);
+  text-align: center;
+  min-height: 20px;
+  color: var(--danger);
+  letter-spacing: 0.02em;
+}
+
+#message.success {
+  color: var(--success);
+}
+
+/* ── Responsive ──────────────────────────────────────── */
+@media (max-width: 768px) {
+  .container {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+  .left-panel {
+    padding: 40px 32px 20px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .left-panel h1 { font-size: 28px; }
+  .right-panel   { padding: 32px; }
+}

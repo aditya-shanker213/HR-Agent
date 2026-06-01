@@ -9,6 +9,7 @@ class AgentState(TypedDict):
     Each node reads some fields and writes some fields.
     No node communicates with another node directly — only through this.
     """
+    user_id: str   # ← ADD — real user from JWT, replaces hardcoded emp_001
 
     # ── Set at the start of every request ─────────────────────────
     session_id:   str            # Redis key for conversation history

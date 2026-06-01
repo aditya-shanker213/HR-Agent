@@ -1,16 +1,26 @@
-.env
+# Model files
+backend/kokoro-v0_19.onnx
+backend/voices.bin
+backend/kokoro*.onnx
+
+
+
+# Python
 __pycache__/
 *.pyc
-*.pyo
-.DS_Store
-*.egg-info/
-dist/
-build/
 .venv/
 venv/
+*.egg-info/
+
+# Environment
+.env
+
+# Mac
+.DS_Store
+
+# Storage
 storage/
+
+# Audio
 *.wav
 *.mp3
-*.onnx
-*.bin
-

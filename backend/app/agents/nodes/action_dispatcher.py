@@ -32,8 +32,9 @@ async def action_dispatcher_node(
     tool_result = await dispatch(
         intent=intent,
         entities=entities,
-        user_id="emp_001",   # Phase 3: replace with real user from JWT
+        user_id=state.get("user_id", "emp_001"),   # ← real user
     )
+    
 
     state["tool_result"] = tool_result
 

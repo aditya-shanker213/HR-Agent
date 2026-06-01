@@ -32,9 +32,10 @@ class AgentGraph:
                     (return early)
     """
 
-    def __init__(self, ai_service, redis):
+    def __init__(self, ai_service, redis, rag_service=None):
         self.ai      = ai_service
         self.redis   = redis
+        self.rag_service = rag_service
 
     async def run(self, state: AgentState) -> AgentState:
 
@@ -53,7 +54,7 @@ class AgentGraph:
 
         # Branch A: FAQ or unknown → rag_node handles it
         if intent in ("faq", "unknown"):
-            state = await rag_node(state, self.ai)
+            state = await rag_node(state, self.ai, self.rag_service)
             return state
 
         # Branch B: escalate → handoff_node

@@ -40,13 +40,12 @@ class TTSService:
 
         def _run():
             # Auto-detect voice if configured one isn't available
-            voice = settings.TTS_VOICE
-            available = list(self._kokoro.get_voices())
 
-            if voice not in available:
-                print(f"[tts] Voice '{voice}' not found. Available: {available}")
-                print(f"[tts] Falling back to: {available[0]}")
-                voice = available[0]
+            available = list(self._kokoro.get_voices())
+            preferred = ["af_sarah", "af_sky", "af_bella", "af"]
+            voice = next((v for v in preferred if v in available), available[0])
+            
+
 
             samples, sample_rate = self._kokoro.create(
                 text,

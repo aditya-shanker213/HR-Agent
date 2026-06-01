@@ -12,16 +12,21 @@ def _load_prompt() -> str:
 
 
 def _clean_json(raw: str) -> str:
-    """
-    LLMs sometimes wrap JSON in markdown code blocks.
-    This strips them out before parsing.
-    e.g. ```json\n{...}\n``` → {...}
-    """
+    """Strip think tags, markdown fences, and fix common LLM JSON errors."""
+    import re
+    # Remove qwen3 think blocks
+    raw = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL)
     raw = raw.strip()
+    # Remove markdown fences
     if raw.startswith("```"):
         lines = raw.split("\n")
-        # remove first line (```json) and last line (```)
         raw = "\n".join(lines[1:-1])
+    raw = raw.strip()
+    # Fix trailing commas before } or ] — common LLM mistake
+    raw = re.sub(r',\s*([}\]])', r'\1', raw)
+    # Fix trailing null values like {..., null}
+    raw = re.sub(r',\s*null\s*}', '}', raw)
+    raw = re.sub(r',\s*null\s*]', ']', raw)
     return raw.strip()
 
 
