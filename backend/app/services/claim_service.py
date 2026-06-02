@@ -16,6 +16,7 @@ This service handles:
 - HRMS/import read-only compatibility
 - Payment processing
 - Statistics and dashboard data
+- Audit logging for sensitive claim actions
 
 Important production rules:
 - LLM must never directly access DB.
@@ -27,6 +28,7 @@ Important production rules:
 - AI must never approve claims.
 - Auto approval is disabled in service logic.
 - Every submitted claim must go through manager/finance/HR approval.
+- Audit logs must not break claim workflow if audit logging fails.
 """
 
 from __future__ import annotations
@@ -38,6 +40,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import ValidationError
 
+from backend.app.models.audit_log_model import (
+    AuditActionCategory,
+    AuditActionType,
+    AuditSensitivity,
+    AuditStatus,
+    build_audit_target,
+    build_user_actor,
+)
 from backend.app.models.claim_model import (
     Claim,
     ClaimActionHistory,
@@ -81,6 +91,7 @@ from backend.app.schemas.claim_schema import (
     VerifyClaimAttachmentRequest,
     WithdrawClaimRequest,
 )
+from backend.app.services.audit_log_service import AuditLogService
 
 
 class ClaimService:
@@ -143,6 +154,7 @@ class ClaimService:
         claim_type_repo,
         employee_repo,
         company_settings_repo=None,
+        audit_service: Optional[AuditLogService] = None,
     ):
         """
         Initialize claim service.
@@ -152,11 +164,13 @@ class ClaimService:
             claim_type_repo: Claim type repository instance
             employee_repo: Employee repository instance
             company_settings_repo: Optional company settings repository/service
+            audit_service: Optional audit log service. If missing, claim service still works.
         """
         self.claim_repo = claim_repo
         self.claim_type_repo = claim_type_repo
         self.employee_repo = employee_repo
         self.company_settings_repo = company_settings_repo
+        self.audit_service = audit_service
 
     # ---------------------------------------------------------------------
     # Response helpers
@@ -254,6 +268,98 @@ class ClaimService:
         raise AttributeError(
             f"None of these repository methods exist: {', '.join(method_names)}"
         )
+
+    async def _log_claim_audit(
+        self,
+        claim: Optional[Dict[str, Any]],
+        action: str,
+        actor_id: Optional[str],
+        actor_role: str,
+        actor_name: Optional[str] = None,
+        actor_email: Optional[str] = None,
+        status: AuditStatus = AuditStatus.SUCCESS,
+        sensitivity: AuditSensitivity = AuditSensitivity.MEDIUM,
+        is_sensitive: bool = False,
+        message: Optional[str] = None,
+        reason: Optional[str] = None,
+        extra_metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Write claim audit log safely.
+
+        Important:
+        - Audit failure must never break claim workflow.
+        - AI must not approve claims.
+        - Money/payment actions should be HIGH or CRITICAL sensitivity.
+        """
+        if self.audit_service is None or not claim:
+            return
+
+        try:
+            company_id = self._normalize_company_id(claim.get("company_id"))
+
+            claim_id = claim.get("claim_id")
+            claim_type_name = claim.get("claim_type_name") or "Claim"
+            claim_type_code = claim.get("claim_type_code")
+            employee_id = claim.get("employee_id")
+            employee_name = claim.get("employee_name")
+            amount = claim.get("amount")
+            approved_amount = claim.get("approved_amount")
+            paid_amount = claim.get("paid_amount")
+            currency = claim.get("currency", "INR")
+
+            actor_payload = {
+                "id": actor_id,
+                "role": actor_role,
+                "full_name": actor_name,
+                "email": actor_email,
+            }
+
+            safe_metadata = {
+                "claim_id": claim_id,
+                "claim_type_code": claim_type_code,
+                "claim_type_name": claim_type_name,
+                "employee_id": employee_id,
+                "employee_name": employee_name,
+                "amount": amount,
+                "approved_amount": approved_amount,
+                "paid_amount": paid_amount,
+                "currency": currency,
+                "claim_status": claim.get("status"),
+                "payment_status": claim.get("payment_status"),
+                "source": claim.get("source"),
+                "is_read_only": claim.get("is_read_only", False),
+                "ai_approval_allowed": False,
+            }
+
+            if extra_metadata:
+                safe_metadata.update(extra_metadata)
+
+            await self.audit_service.log_action(
+                actor=build_user_actor(actor_payload),
+                target=build_audit_target(
+                    target_type="claim",
+                    target_id=claim_id,
+                    target_display=f"Claim {claim_id} - {claim_type_name}",
+                    employee_id=employee_id,
+                    company_id=company_id,
+                ),
+                category=AuditActionCategory.CLAIM,
+                action=action,
+                status=status,
+                sensitivity=sensitivity,
+                is_sensitive=is_sensitive or sensitivity in {
+                    AuditSensitivity.HIGH,
+                    AuditSensitivity.CRITICAL,
+                },
+                message=message,
+                reason=reason,
+                extra_metadata=safe_metadata,
+                company_id=company_id,
+            )
+
+        except Exception as exc:
+            print(f"Claim audit log failed: {exc}")
 
     # ---------------------------------------------------------------------
     # ID generation
@@ -1151,6 +1257,19 @@ class ClaimService:
                 company_id=company_id,
             )
 
+            await self._log_claim_audit(
+                claim=created_claim,
+                action=AuditActionType.SUBMITTED.value,
+                actor_id=created_by or employee_id,
+                actor_role="employee",
+                sensitivity=AuditSensitivity.MEDIUM,
+                message=(
+                    f"Employee {created_claim.get('employee_name') if created_claim else employee_id} "
+                    f"submitted {created_claim.get('claim_type_name') if created_claim else 'claim'} "
+                    f"for {request.currency} {request.amount}"
+                ),
+            )
+
             return True, self._success(
                 data={
                     "claim_id": claim_id,
@@ -1297,6 +1416,15 @@ class ClaimService:
             created_claim = await self.claim_repo.find_by_claim_id(
                 claim_id=claim_id,
                 company_id=company_id,
+            )
+
+            await self._log_claim_audit(
+                claim=created_claim,
+                action=AuditActionType.DRAFT_CREATED.value,
+                actor_id=created_by or employee_id,
+                actor_role="employee",
+                sensitivity=AuditSensitivity.LOW,
+                message=f"Employee created draft claim {claim_id}",
             )
 
             return True, self._success(
@@ -1451,6 +1579,19 @@ class ClaimService:
             created_claim = await self.claim_repo.find_by_claim_id(
                 claim_id=claim_id,
                 company_id=company_id,
+            )
+
+            await self._log_claim_audit(
+                claim=created_claim,
+                action=AuditActionType.IMPORTED_FROM_HRMS.value,
+                actor_id=imported_by or "hrms",
+                actor_role="system",
+                sensitivity=AuditSensitivity.MEDIUM,
+                message=f"Claim {claim_id} imported from HRMS",
+                extra_metadata={
+                    "external_hrms_id": request.external_hrms_id,
+                    "source": ClaimSource.HRMS.value,
+                },
             )
 
             return True, self._success(
@@ -1864,6 +2005,15 @@ class ClaimService:
                 company_id=company_id,
             )
 
+            await self._log_claim_audit(
+                claim=updated_claim,
+                action=AuditActionType.UPDATED.value,
+                actor_id=updated_by or employee_id,
+                actor_role="employee",
+                sensitivity=AuditSensitivity.MEDIUM,
+                message=f"Employee updated claim {claim_id}",
+            )
+
             return True, self._success(
                 data={"claim": self._to_claim_response(updated_claim)},
                 message="Claim updated successfully",
@@ -2010,6 +2160,15 @@ class ClaimService:
                 company_id=company_id,
             )
 
+            await self._log_claim_audit(
+                claim=updated_claim,
+                action=AuditActionType.SUBMITTED.value,
+                actor_id=employee_id,
+                actor_role="employee",
+                sensitivity=AuditSensitivity.MEDIUM,
+                message=f"Employee submitted claim {claim_id} for approval",
+            )
+
             return True, self._success(
                 data={
                     "claim_id": claim_id,
@@ -2083,6 +2242,16 @@ class ClaimService:
             updated_claim = await self.claim_repo.find_by_claim_id(
                 claim_id=claim_id,
                 company_id=company_id,
+            )
+
+            await self._log_claim_audit(
+                claim=updated_claim,
+                action=AuditActionType.RESUBMITTED.value,
+                actor_id=employee_id,
+                actor_role="employee",
+                sensitivity=AuditSensitivity.MEDIUM,
+                message=f"Employee resubmitted claim {claim_id}",
+                reason=request.comments,
             )
 
             return True, self._success(
@@ -2273,6 +2442,23 @@ class ClaimService:
                 company_id=company_id,
             )
 
+            await self._log_claim_audit(
+                claim=final_claim,
+                action=AuditActionType.APPROVED.value,
+                actor_id=approver_id,
+                actor_role=step.get("approver_role") or "approver",
+                actor_name=approver_name,
+                sensitivity=AuditSensitivity.HIGH,
+                is_sensitive=True,
+                message=f"Claim {claim_id} approved by {step.get('approver_role')}",
+                reason=request.comments,
+                extra_metadata={
+                    "approved_amount": approved_amount,
+                    "approval_step_order": step_order,
+                    "final_approval": final_claim.get("status") == ClaimStatus.APPROVED.value,
+                },
+            )
+
             return True, self._success(
                 data={"claim": self._to_private_response(final_claim)},
                 message="Claim approved successfully",
@@ -2355,6 +2541,18 @@ class ClaimService:
             updated_claim = await self.claim_repo.find_by_claim_id(
                 claim_id=claim_id,
                 company_id=company_id,
+            )
+
+            await self._log_claim_audit(
+                claim=updated_claim,
+                action=AuditActionType.REJECTED.value,
+                actor_id=approver_id,
+                actor_role=approver_role.value if approver_role else "approver",
+                actor_name=approver_name,
+                sensitivity=AuditSensitivity.HIGH,
+                is_sensitive=True,
+                message=f"Claim {claim_id} rejected",
+                reason=request.rejection_reason,
             )
 
             return True, self._success(
@@ -2441,6 +2639,17 @@ class ClaimService:
                 company_id=company_id,
             )
 
+            await self._log_claim_audit(
+                claim=updated_claim,
+                action=AuditActionType.SENT_BACK.value,
+                actor_id=actor_id,
+                actor_role=actor_role.value if actor_role else "approver",
+                actor_name=actor_name,
+                sensitivity=AuditSensitivity.MEDIUM,
+                message=f"Claim {claim_id} sent back for correction",
+                reason=request.sent_back_reason,
+            )
+
             return True, self._success(
                 data={"claim": self._to_private_response(updated_claim)},
                 message="Claim sent back successfully",
@@ -2518,6 +2727,16 @@ class ClaimService:
                 company_id=company_id,
             )
 
+            await self._log_claim_audit(
+                claim=updated_claim,
+                action=AuditActionType.CANCELLED.value,
+                actor_id=employee_id,
+                actor_role="employee",
+                sensitivity=AuditSensitivity.MEDIUM,
+                message=f"Employee cancelled claim {claim_id}",
+                reason=request.cancellation_reason,
+            )
+
             return True, self._success(
                 data={"claim": self._to_claim_response(updated_claim)},
                 message="Claim cancelled successfully",
@@ -2589,6 +2808,16 @@ class ClaimService:
             updated_claim = await self.claim_repo.find_by_claim_id(
                 claim_id=claim_id,
                 company_id=company_id,
+            )
+
+            await self._log_claim_audit(
+                claim=updated_claim,
+                action=AuditActionType.WITHDRAWN.value,
+                actor_id=employee_id,
+                actor_role="employee",
+                sensitivity=AuditSensitivity.MEDIUM,
+                message=f"Employee withdrew claim {claim_id}",
+                reason=request.withdrawal_reason,
             )
 
             return True, self._success(
@@ -2666,6 +2895,25 @@ class ClaimService:
                 ),
             )
 
+            updated_claim = await self.claim_repo.find_by_claim_id(
+                claim_id=claim_id,
+                company_id=company_id,
+            )
+
+            await self._log_claim_audit(
+                claim=updated_claim,
+                action=AuditActionType.UPDATED.value,
+                actor_id=employee_id,
+                actor_role="employee",
+                sensitivity=AuditSensitivity.MEDIUM,
+                message=f"Attachment added to claim {claim_id}",
+                extra_metadata={
+                    "attachment_file_name": attachment.file_name,
+                    "attachment_file_type": attachment.file_type,
+                    "attachment_file_size": attachment.file_size,
+                },
+            )
+
             return True, self._success(
                 data={
                     "claim_id": claim_id,
@@ -2732,6 +2980,25 @@ class ClaimService:
                     actor_role="finance",
                     comments=request.comments or "Attachment verification updated",
                 ),
+            )
+
+            updated_claim = await self.claim_repo.find_by_claim_id(
+                claim_id=claim_id,
+                company_id=company_id,
+            )
+
+            await self._log_claim_audit(
+                claim=updated_claim,
+                action=AuditActionType.UPDATED.value,
+                actor_id=verifier_id,
+                actor_role="finance",
+                sensitivity=AuditSensitivity.MEDIUM,
+                message=f"Attachment verification updated for claim {claim_id}",
+                reason=request.comments,
+                extra_metadata={
+                    "attachment_index": attachment_index,
+                    "is_verified": request.is_verified,
+                },
             )
 
             return True, self._success(
@@ -2807,6 +3074,17 @@ class ClaimService:
             updated_claim = await self.claim_repo.find_by_claim_id(
                 claim_id=claim_id,
                 company_id=company_id,
+            )
+
+            await self._log_claim_audit(
+                claim=updated_claim,
+                action=AuditActionType.PAYMENT_STARTED.value,
+                actor_id=actor_id,
+                actor_role="finance",
+                sensitivity=AuditSensitivity.HIGH,
+                is_sensitive=True,
+                message=f"Payment processing started for claim {claim_id}",
+                reason=request.comments if request else None,
             )
 
             return True, self._success(
@@ -2892,6 +3170,22 @@ class ClaimService:
                 company_id=company_id,
             )
 
+            await self._log_claim_audit(
+                claim=updated_claim,
+                action=AuditActionType.PAYMENT_COMPLETED.value,
+                actor_id=actor_id,
+                actor_role="finance",
+                sensitivity=AuditSensitivity.CRITICAL,
+                is_sensitive=True,
+                message=f"Claim {claim_id} marked as paid",
+                reason=request.comments,
+                extra_metadata={
+                    "payment_reference": request.payment_reference,
+                    "payment_date": str(request.payment_date),
+                    "paid_amount": request.paid_amount,
+                },
+            )
+
             return True, self._success(
                 data={"claim": self._to_private_response(updated_claim)},
                 message="Claim marked as paid successfully",
@@ -2952,6 +3246,17 @@ class ClaimService:
             updated_claim = await self.claim_repo.find_by_claim_id(
                 claim_id=claim_id,
                 company_id=company_id,
+            )
+
+            await self._log_claim_audit(
+                claim=updated_claim,
+                action=AuditActionType.PAYMENT_FAILED.value,
+                actor_id=actor_id,
+                actor_role="finance",
+                sensitivity=AuditSensitivity.HIGH,
+                is_sensitive=True,
+                message=f"Payment failed for claim {claim_id}",
+                reason=request.payment_failure_reason,
             )
 
             return True, self._success(

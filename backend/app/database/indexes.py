@@ -13,6 +13,7 @@ Indexes are created at application startup to ensure:
 - Unique employee records per company
 - Unique leave request records per company
 - Unique claim records per company
+- Fast audit log and tool log filtering
 - Fast master data listing, filtering, searching, and workflow lookups
 
 Pattern:
@@ -42,9 +43,6 @@ from pymongo import ASCENDING, DESCENDING, TEXT
 class IndexManager:
     """
     Manages MongoDB index creation.
-
-    Keep all collection indexes here so staging, production, and local
-    development use the same database structure.
     """
 
     def __init__(self, db: AsyncIOMotorDatabase):
@@ -53,9 +51,6 @@ class IndexManager:
     async def create_all_indexes(self) -> Dict[str, Any]:
         """
         Create all required indexes.
-
-        Returns:
-            Dictionary with index creation results.
         """
         results: Dict[str, Any] = {}
 
@@ -71,6 +66,8 @@ class IndexManager:
         results["employees"] = await self.create_employees_indexes()
         results["leave_requests"] = await self.create_leave_requests_indexes()
         results["claims"] = await self.create_claims_indexes()
+        results["audit_logs"] = await self.create_audit_logs_indexes()
+        results["tool_logs"] = await self.create_tool_logs_indexes()
 
         print("MongoDB indexes checked/created successfully")
 
@@ -559,10 +556,6 @@ class IndexManager:
     async def create_employees_indexes(self) -> Dict[str, Any]:
         """
         Create indexes for employees collection.
-
-        Why company_id is included in unique indexes:
-        The employee model supports future multi-company usage.
-        EMP001 can exist in different companies, but not twice inside the same company.
         """
         index_definitions = [
             {
@@ -741,17 +734,6 @@ class IndexManager:
     async def create_leave_requests_indexes(self) -> Dict[str, Any]:
         """
         Create indexes for leave_requests collection.
-
-        These indexes support:
-        - Unique leave request ID per company
-        - HRMS imported/read-only leave records
-        - Employee leave history
-        - Pending approvals
-        - Manager/HR dashboards
-        - Calendar view
-        - Conflict detection
-        - Leave statistics
-        - Search/filter APIs
         """
         index_definitions = [
             {
@@ -992,7 +974,6 @@ class IndexManager:
             index_definitions=index_definitions,
         )
 
-
     # -------------------------
     # Claims indexes
     # -------------------------
@@ -1001,20 +982,9 @@ class IndexManager:
         """
         Create indexes for claims collection.
 
-        These indexes support:
-        - Unique claim ID per company
-        - HRMS imported/read-only claim records
-        - Employee claim history
-        - Manager/HR/Finance approval queues
-        - Structured approval step lookup
-        - Claim type, department, manager, status, source, and payment filters
-        - Duplicate detection helper queries
-        - Payment processing dashboards
-        - Claim statistics and reporting
-
         Important:
         - Claim auto approval is disabled.
-        - Do not create indexes for auto approval workflows.
+        - Do not create indexes for AI approval workflows.
         """
         index_definitions = [
             {
@@ -1297,6 +1267,318 @@ class IndexManager:
 
         return await self._create_indexes_for_collection(
             collection_name="claims",
+            index_definitions=index_definitions,
+        )
+
+    # -------------------------
+    # Audit Logs indexes
+    # -------------------------
+
+    async def create_audit_logs_indexes(self) -> Dict[str, Any]:
+        """
+        Create indexes for audit_logs collection.
+        """
+        index_definitions = [
+            {
+                "keys": [("company_id", ASCENDING), ("created_at", DESCENDING)],
+                "name": "idx_audit_logs_company_created",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("actor.actor_id", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_audit_logs_company_actor_created",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("actor.actor_type", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_audit_logs_company_actor_type_created",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("actor.actor_role", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_audit_logs_company_actor_role_created",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("target.target_type", ASCENDING),
+                    ("target.target_id", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_audit_logs_company_target_created",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("target.employee_id", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_audit_logs_company_employee_created",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("category", ASCENDING),
+                    ("action", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_audit_logs_company_category_action_created",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("category", ASCENDING),
+                    ("status", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_audit_logs_company_category_status_created",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("status", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_audit_logs_company_status_created",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("sensitivity", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_audit_logs_company_sensitivity_created",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("is_sensitive", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_audit_logs_company_sensitive_created",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("source", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_audit_logs_company_source_created",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("external_hrms_id", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_audit_logs_company_external_hrms_created",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("request.request_id", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_audit_logs_company_request_id_created",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("request.correlation_id", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_audit_logs_company_correlation_id_created",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("request.trace_id", ASCENDING),
+                    ("created_at", DESCENDING),
+                ],
+                "name": "idx_audit_logs_company_trace_id_created",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("message", TEXT),
+                    ("reason", TEXT),
+                    ("action", TEXT),
+                    ("target.target_display", TEXT),
+                    ("actor.actor_name", TEXT),
+                    ("actor.actor_email", TEXT),
+                    ("error_message", TEXT),
+                ],
+                "name": "idx_audit_logs_text_search",
+            },
+        ]
+
+        return await self._create_indexes_for_collection(
+            collection_name="audit_logs",
+            index_definitions=index_definitions,
+        )
+
+    # -------------------------
+    # Tool Logs indexes
+    # -------------------------
+
+    async def create_tool_logs_indexes(self) -> Dict[str, Any]:
+        """
+        Create indexes for tool_logs collection.
+        """
+        index_definitions = [
+            {
+                "keys": [("company_id", ASCENDING), ("started_at", DESCENDING)],
+                "name": "idx_tool_logs_company_started",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("actor.actor_id", ASCENDING),
+                    ("started_at", DESCENDING),
+                ],
+                "name": "idx_tool_logs_company_actor_started",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("actor.actor_type", ASCENDING),
+                    ("started_at", DESCENDING),
+                ],
+                "name": "idx_tool_logs_company_actor_type_started",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("session_id", ASCENDING),
+                    ("started_at", DESCENDING),
+                ],
+                "name": "idx_tool_logs_company_session_started",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("conversation_id", ASCENDING),
+                    ("started_at", DESCENDING),
+                ],
+                "name": "idx_tool_logs_company_conversation_started",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("tool_name", ASCENDING),
+                    ("status", ASCENDING),
+                    ("started_at", DESCENDING),
+                ],
+                "name": "idx_tool_logs_company_tool_status_started",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("status", ASCENDING),
+                    ("started_at", DESCENDING),
+                ],
+                "name": "idx_tool_logs_company_status_started",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("input_category", ASCENDING),
+                    ("started_at", DESCENDING),
+                ],
+                "name": "idx_tool_logs_company_input_category_started",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("output_category", ASCENDING),
+                    ("started_at", DESCENDING),
+                ],
+                "name": "idx_tool_logs_company_output_category_started",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("is_sensitive", ASCENDING),
+                    ("started_at", DESCENDING),
+                ],
+                "name": "idx_tool_logs_company_sensitive_started",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("required_confirmation", ASCENDING),
+                    ("confirmed_by_user", ASCENDING),
+                    ("started_at", DESCENDING),
+                ],
+                "name": "idx_tool_logs_company_confirmation_started",
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("request_id", ASCENDING),
+                    ("started_at", DESCENDING),
+                ],
+                "name": "idx_tool_logs_company_request_id_started",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("correlation_id", ASCENDING),
+                    ("started_at", DESCENDING),
+                ],
+                "name": "idx_tool_logs_company_correlation_id_started",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("trace_id", ASCENDING),
+                    ("started_at", DESCENDING),
+                ],
+                "name": "idx_tool_logs_company_trace_id_started",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("company_id", ASCENDING),
+                    ("latency_ms", DESCENDING),
+                    ("started_at", DESCENDING),
+                ],
+                "name": "idx_tool_logs_company_latency_started",
+                "sparse": True,
+            },
+            {
+                "keys": [
+                    ("tool_name", TEXT),
+                    ("input_summary", TEXT),
+                    ("output_summary", TEXT),
+                    ("actor.actor_name", TEXT),
+                    ("error_message", TEXT),
+                    ("blocked_reason", TEXT),
+                ],
+                "name": "idx_tool_logs_text_search",
+            },
+        ]
+
+        return await self._create_indexes_for_collection(
+            collection_name="tool_logs",
             index_definitions=index_definitions,
         )
 

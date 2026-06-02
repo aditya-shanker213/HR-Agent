@@ -26,7 +26,7 @@ Important:
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from bson import ObjectId
@@ -120,6 +120,31 @@ class EmployeeRepository:
         Convert ObjectId for many documents.
         """
         return [self._convert_id(document) for document in documents if document]
+
+    def _convert_dates_for_mongo(self, value: Any) -> Any:
+        """
+        Recursively convert Python date objects to datetime objects for MongoDB.
+
+        MongoDB can store datetime, but not datetime.date directly.
+        This fixes errors like:
+        Invalid document: cannot encode object: datetime.date(...)
+        """
+        if isinstance(value, datetime):
+            return value
+
+        if isinstance(value, date):
+            return datetime.combine(value, time.min)
+
+        if isinstance(value, dict):
+            return {
+                key: self._convert_dates_for_mongo(item)
+                for key, item in value.items()
+            }
+
+        if isinstance(value, list):
+            return [self._convert_dates_for_mongo(item) for item in value]
+
+        return value
 
     def _normalize_company_id(self, company_id: Optional[str] = "default") -> str:
         """
@@ -246,7 +271,7 @@ class EmployeeRepository:
         cleaned["created_at"] = now
         cleaned["updated_at"] = now
 
-        return cleaned
+        return self._convert_dates_for_mongo(cleaned)
 
     def _clean_update_data(self, update_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -274,7 +299,7 @@ class EmployeeRepository:
 
         cleaned["updated_at"] = datetime.utcnow()
 
-        return cleaned
+        return self._convert_dates_for_mongo(cleaned)
 
     def _build_base_query(
         self,
@@ -787,7 +812,9 @@ class EmployeeRepository:
         query["employment_status"] = "probation"
 
         if not include_expired_probation:
-            query["probation_end_date"] = {"$gte": date.today()}
+            query["probation_end_date"] = {
+                "$gte": datetime.combine(date.today(), time.min)
+            }
 
         cursor = (
             self.collection.find(query)
@@ -817,8 +844,8 @@ class EmployeeRepository:
         query = self._build_base_query(company_id, True)
         query["employment_status"] = "probation"
         query["probation_end_date"] = {
-            "$gte": today,
-            "$lte": end_date,
+            "$gte": datetime.combine(today, time.min),
+            "$lte": datetime.combine(end_date, time.max),
         }
 
         cursor = (
@@ -970,7 +997,6 @@ class EmployeeRepository:
         query["manager_id"] = manager_id
 
         cursor = self.collection.find(query, {"_id": 1})
-
         employees = await cursor.to_list(length=None)
 
         return [str(employee["_id"]) for employee in employees]
@@ -1063,6 +1089,8 @@ class EmployeeRepository:
                 if key not in self.BLOCKED_UPDATE_FIELDS:
                     update_data[key] = value
 
+        update_data = self._convert_dates_for_mongo(update_data)
+
         object_id = self._to_object_id(employee_id)
 
         if object_id is None:
@@ -1097,6 +1125,8 @@ class EmployeeRepository:
 
         if updated_by:
             update_data["updated_by"] = self._normalize_optional_text(updated_by)
+
+        update_data = self._convert_dates_for_mongo(update_data)
 
         object_id = self._to_object_id(employee_id)
 
@@ -1138,6 +1168,8 @@ class EmployeeRepository:
         if updated_by:
             update_data["updated_by"] = self._normalize_optional_text(updated_by)
 
+        update_data = self._convert_dates_for_mongo(update_data)
+
         query: Dict[str, Any] = {"_id": object_id}
 
         if company_id is not None:
@@ -1172,6 +1204,8 @@ class EmployeeRepository:
 
         if updated_by:
             update_data["updated_by"] = self._normalize_optional_text(updated_by)
+
+        update_data = self._convert_dates_for_mongo(update_data)
 
         query: Dict[str, Any] = {"_id": object_id}
 
@@ -1213,6 +1247,8 @@ class EmployeeRepository:
 
         if updated_by:
             set_data["updated_by"] = self._normalize_optional_text(updated_by)
+
+        set_data = self._convert_dates_for_mongo(set_data)
 
         query: Dict[str, Any] = {
             "_id": object_id,
@@ -1258,6 +1294,8 @@ class EmployeeRepository:
 
         if updated_by:
             set_data["updated_by"] = self._normalize_optional_text(updated_by)
+
+        set_data = self._convert_dates_for_mongo(set_data)
 
         query: Dict[str, Any] = {
             "_id": object_id,
@@ -1306,6 +1344,8 @@ class EmployeeRepository:
         if updated_by:
             update_data["updated_by"] = self._normalize_optional_text(updated_by)
 
+        update_data = self._convert_dates_for_mongo(update_data)
+
         query: Dict[str, Any] = {"_id": object_id}
 
         if company_id is not None:
@@ -1341,6 +1381,8 @@ class EmployeeRepository:
 
         if updated_by:
             update_data["updated_by"] = self._normalize_optional_text(updated_by)
+
+        update_data = self._convert_dates_for_mongo(update_data)
 
         query: Dict[str, Any] = {"_id": object_id}
 
